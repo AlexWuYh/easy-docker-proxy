@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>事件 · EDP Console</title>
+  <link rel="icon" href="/stats/favicon.svg" type="image/svg+xml" />
+  <script>
+    (function () {
+      var t = localStorage.getItem("edp_theme");
+      if (t !== "light" && t !== "dark") {
+        t = window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+      }
+      document.documentElement.classList.add("theme-" + t);
+    })();
+  </script>
+  <link rel="stylesheet" href="/stats/css/app.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topnav" id="app-nav"></header>
+    <main class="main">
+      <div class="page-head">
+        <div>
+          <h1>拉取事件</h1>
+          <div class="sub">最近失败与原始事件流 · 从看板独立出来便于排查</div>
+        </div>
+        <div class="toolbar">
+          <label class="sr-only" for="limit">条数</label>
+          <select id="limit" class="input" aria-label="条数">
+            <option value="30">30 条</option>
+            <option value="50" selected>50 条</option>
+            <option value="100">100 条</option>
+          </select>
+          <button type="button" class="btn btn-primary" id="btn-refresh">刷新</button>
+        </div>
+      </div>
+      <div id="load-error" class="error-banner" hidden></div>
+
+      <div class="dim-tabs" role="tablist" aria-label="事件类型">
+        <button type="button" class="active" data-tab="errors">最近失败</button>
+        <button type="button" data-tab="events">全部事件</button>
+      </div>
+
+      <section class="glass panel" id="panel-errors">
+        <div class="panel-head"><h2>最近失败</h2></div>
+        <div class="table-wrap" id="errors"></div>
+      </section>
+
+      <section class="glass panel" id="panel-events" hidden style="margin-top:1rem">
+        <div class="panel-head"><h2>最近事件（含成功）</h2></div>
+        <div class="table-wrap" id="events"></div>
+      </section>
+    </main>
+  </div>
+  <script src="/stats/js/app.js"></script>
+  <script>
+    if (!EDP.requireAuth()) throw new Error("auth");
+    EDP.renderNav("events");
+
+    function table(headers, rows) {
+      if (!rows) return '<p class="empty">暂无数据</p>';
+      return `<table class="data"><thead><tr>${headers.map(h => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table>`;
+    }
+
+    function evRows(items) {
+      return (items || []).map(e => {
+        const href = e.repository
+          ? `/stats/image.html?registry=${encodeURIComponent(e.registry)}&repository=${encodeURIComponent(e.repository)}`
+          : "";
+        return `<tr ${href ? `class="clickable" data-href="${href}"` : ""}>
+          <td>${EDP.fmtTime(e.ts)}</td>
+          <td class="mono">${EDP.esc(e.registry)}</td>
+          <td class="mono">${EDP.esc(e.repository)}${e.reference ? ":" + EDP.esc(e.reference) : ""}</td>
+          <td><span class="badge badge-info">${EDP.esc(e.event_type || "—")}</span></td>
+          <td><span class="badge ${e.status >= 400 ? "badge-err" : "badge-ok"}">${e.status || "—"}</span></td>
+          <td class="mono">${EDP.esc(e.client_ip)}</td>
+          <td>${EDP.formatBytes(e.bytes || 0)}</td>
+          <td class="mono">${EDP.esc(e.error || "")}</td>
+          <td>${href ? `<a href="${href}">镜像</a>` : "—"}</td>
+        </tr>`;
+      }).join("");
+    }
+
+    function bindRows() {
+      document.querySelectorAll("tr.clickable[data-href]").forEach(tr => {
+        tr.addEventListener("click", (ev) => {
+          if (ev.target.tagName === "A") return;
+          location.href = tr.getAttribute("data-href");
+        });
+      });
+    }
+
+    async function load() {
+      const err = document.getElementById("load-error");
+      err.hidden = true;
+      const limit = document.getElementById("limit").value;
+      try {
+        const [errors, events] = await Promise.all([
+          EDP.api("/api/v1/errors?limit=" + encodeURIComponent(limit)),
+          EDP.api("/api/v1/events?limit=" + encodeURIComponent(limit)),
+        ]);
+        const headers = ["Time", "Reg", "Repo", "Type", "Status", "IP", "Bytes", "Error", ""];
+        document.getElementById("errors").innerHTML = table(headers, evRows(errors.items));
+        document.getElementById("events").innerHTML = table(headers, evRows(events.items));
+        bindRows();
+      } catch (e) {
+        err.hidden = false;
+        err.textContent = e.message;
+      }
+    }
+
+    document.querySelectorAll(".dim-tabs button").forEach(btn => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".dim-tabs button").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        const tab = btn.dataset.tab;
+        document.getElementById("panel-errors").hidden = tab !== "errors";
+        document.getElementById("panel-events").hidden = tab !== "events";
+      });
+    });
+    document.getElementById("btn-refresh").addEventListener("click", load);
+    document.getElementById("limit").addEventListener("change", load);
+    load();
+  </script>
+</body>
+</html>

@@ -134,6 +134,25 @@ CREATE TABLE IF NOT EXISTS stats_daily_client (
   bytes_total   INTEGER DEFAULT 0,
   PRIMARY KEY (day, client_ip)
 );
+
+CREATE TABLE IF NOT EXISTS web_users (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  username      TEXT    NOT NULL UNIQUE,
+  password_hash TEXT    NOT NULL,
+  role          TEXT    NOT NULL DEFAULT 'admin',
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS web_sessions (
+  token         TEXT PRIMARY KEY,
+  user_id       INTEGER NOT NULL,
+  expires_at    INTEGER NOT NULL,
+  created_at    INTEGER NOT NULL,
+  FOREIGN KEY(user_id) REFERENCES web_users(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON web_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_exp ON web_sessions(expires_at);
 `
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("migrate: %w", err)

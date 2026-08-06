@@ -1,5 +1,5 @@
-// Package admin serves the management API on admin_listen (token required).
-// Endpoints: /-/config, /-/reload, /healthz, stats, optional /metrics. See .ai/01_DESIGN.md.
+// Package admin serves the management API on admin_listen.
+// Auth: web session token (login) or PROXY_ADMIN_TOKEN for ops/metrics.
 package admin
 
 import (
@@ -11,22 +11,22 @@ import (
 	"github.com/alex_wuyh/easy-docker-proxy/internal/config"
 	"github.com/alex_wuyh/easy-docker-proxy/internal/proxy"
 	"github.com/alex_wuyh/easy-docker-proxy/internal/statsapi"
+	"github.com/alex_wuyh/easy-docker-proxy/internal/store"
 	"github.com/alex_wuyh/easy-docker-proxy/internal/web"
 )
 
-// Handler serves admin endpoints. Fail-closed when admin token is unset.
+// Handler serves admin endpoints.
 type Handler struct {
 	Proxy      *proxy.Proxy
 	ConfigPath string
-	// ReloadFunc reloads config from disk into the proxy. Optional; default uses config.Load.
 	ReloadFunc func() error
-	// Stats is optional read-only analytics API (M3).
-	Stats *statsapi.API
-	// MetricsHandler is optional Prometheus text handler (M4); still token-gated.
+	Stats      *statsapi.API
+	Store      *store.Store
+	// MetricsHandler is optional Prometheus text handler; session or admin token gated.
 	MetricsHandler http.Handler
 }
 
-// NewMux builds the admin HTTP mux with authentication middleware.
+// NewMux builds the admin HTTP mux.
 func NewMux(h *Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", h.handleHealthz)
@@ -39,38 +39,61 @@ func NewMux(h *Handler) http.Handler {
 	if h.MetricsHandler != nil {
 		mux.Handle("/metrics", h.MetricsHandler)
 	}
-	// Stats static UI (same handler for /stats and /stats/*)
 	statsUI := web.Handler()
 	mux.Handle("/stats", statsUI)
 	mux.Handle("/stats/", statsUI)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Liveness probes are public.
-		if r.URL.Path == "/healthz" || r.URL.Path == "/-/healthz" {
+		path := r.URL.Path
+		// Public probes
+		if path == "/healthz" || path == "/-/healthz" {
 			mux.ServeHTTP(w, r)
 			return
 		}
-		if !h.authorize(w, r) {
+		// Public login API
+		if path == "/api/v1/auth/login" {
+			mux.ServeHTTP(w, r)
 			return
+		}
+		// Static UI is public: browsers cannot send sessionStorage Bearer on navigation.
+		// Auth is enforced client-side (requireAuth) + on all /api/v1/* below.
+		if path == "/stats" || path == "/stats/" || strings.HasPrefix(path, "/stats/") {
+			mux.ServeHTTP(w, r)
+			return
+		}
+
+		// Authenticate API / admin / metrics: session user or static admin token
+		user, ok := h.authenticate(r)
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if user != nil {
+			r = statsapi.WithUser(r, user)
 		}
 		mux.ServeHTTP(w, r)
 	})
 }
 
-func (h *Handler) authorize(w http.ResponseWriter, r *http.Request) bool {
+// authenticate returns (user, true) for session; (nil, true) for admin token; (nil, false) if unauthorized.
+func (h *Handler) authenticate(r *http.Request) (*store.User, bool) {
+	tok := bearerOrHeader(r)
+	if tok == "" {
+		return nil, false
+	}
+	// Prefer session lookup
+	if h.Store != nil {
+		if u, err := h.Store.SessionUser(r.Context(), tok); err == nil && u != nil {
+			return u, true
+		}
+	}
+	// Fallback: static PROXY_ADMIN_TOKEN (ops / metrics)
 	cfg := h.Proxy.Config()
-	token := config.AdminToken(cfg)
-	if token == "" {
-		// Fail-closed: no token configured → refuse admin surface.
-		http.Error(w, "admin token not configured", http.StatusServiceUnavailable)
-		return false
+	adminTok := config.AdminToken(cfg)
+	if adminTok != "" && secureEqual(tok, adminTok) {
+		return &store.User{ID: 0, Username: "token-admin", Role: store.RoleAdmin}, true
 	}
-	got := bearerOrHeader(r)
-	if got == "" || !secureEqual(got, token) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return false
-	}
-	return true
+	return nil, false
 }
 
 func bearerOrHeader(r *http.Request) string {
@@ -86,7 +109,6 @@ func bearerOrHeader(r *http.Request) string {
 	return r.URL.Query().Get("token")
 }
 
-// constant-time-ish compare for tokens (length leak ok for admin token).
 func secureEqual(a, b string) bool {
 	if len(a) != len(b) {
 		return false
@@ -113,8 +135,7 @@ func (h *Handler) handleConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	cfg := h.Proxy.Config()
-	writeJSON(w, http.StatusOK, config.MaskedCopy(cfg))
+	writeJSON(w, http.StatusOK, config.MaskedCopy(h.Proxy.Config()))
 }
 
 func (h *Handler) handleReload(w http.ResponseWriter, r *http.Request) {
@@ -126,7 +147,12 @@ func (h *Handler) handleReload(w http.ResponseWriter, r *http.Request) {
 	if h.ReloadFunc != nil {
 		err = h.ReloadFunc()
 	} else {
-		err = h.defaultReload()
+		cfg, e := config.Load(h.ConfigPath)
+		if e != nil {
+			err = e
+		} else {
+			h.Proxy.Reload(cfg)
+		}
 	}
 	if err != nil {
 		log.Printf("[admin] reload failed: %v", err)
@@ -138,15 +164,6 @@ func (h *Handler) handleReload(w http.ResponseWriter, r *http.Request) {
 		n = len(cfg.Registries)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "registries": n})
-}
-
-func (h *Handler) defaultReload() error {
-	cfg, err := config.Load(h.ConfigPath)
-	if err != nil {
-		return err
-	}
-	h.Proxy.Reload(cfg)
-	return nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

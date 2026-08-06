@@ -49,12 +49,16 @@ curl -H 'Host: hub.example.com' http://127.0.0.1:5000/v2/
 curl -H "Authorization: Bearer $PROXY_ADMIN_TOKEN" http://127.0.0.1:5001/-/config
 curl -X POST -H "Authorization: Bearer $PROXY_ADMIN_TOKEN" http://127.0.0.1:5001/-/reload
 
-# Stats 看板（浏览器）
-open "http://127.0.0.1:5001/stats/?token=$PROXY_ADMIN_TOKEN"
+# Stats 控制台（浏览器登录）
+# 首次启动需设置：
+#   export PROXY_WEB_USER=admin
+#   export PROXY_WEB_PASSWORD='your-long-password'
+open "http://127.0.0.1:5001/stats/login.html"
 
-# Stats API
-curl -H "Authorization: Bearer $PROXY_ADMIN_TOKEN" \
-  'http://127.0.0.1:5001/api/v1/summary?range=7d'
+# Stats API（登录后使用 session token，或继续用 PROXY_ADMIN_TOKEN）
+curl -X POST http://127.0.0.1:5001/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"your-long-password"}'
 ```
 
 ### 配置

@@ -37,7 +37,7 @@ func main() {
 		log.Printf("warning: %s unset — admin API (except /healthz) is fail-closed", cfg.Admin.TokenEnv)
 	}
 
-	// Pull event store (M2)
+	// Pull event store (M2) + web users
 	st, err := store.Open(cfg.Storage)
 	if err != nil {
 		log.Fatalf("open store: %v", err)
@@ -47,6 +47,26 @@ func main() {
 			log.Printf("store close: %v", err)
 		}
 	}()
+
+	// Bootstrap first web admin from env (required once if no users)
+	webUser := os.Getenv("PROXY_WEB_USER")
+	if webUser == "" {
+		webUser = "admin"
+	}
+	webPass := os.Getenv("PROXY_WEB_PASSWORD")
+	if created, err := st.BootstrapAdmin(context.Background(), webUser, webPass); err != nil {
+		if webPass == "" {
+			n, _ := st.CountUsers(context.Background())
+			if n == 0 {
+				log.Printf("warning: no web users — set PROXY_WEB_PASSWORD (and optional PROXY_WEB_USER) to create admin, then restart")
+			}
+		} else {
+			log.Printf("warning: bootstrap web admin: %v", err)
+		}
+	} else if created {
+		log.Printf("created initial web admin user %q (change password after login)", webUser)
+	}
+	_ = st.PurgeExpiredSessions(context.Background())
 
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	defer bgCancel()
@@ -89,6 +109,7 @@ func main() {
 		ConfigPath: *configPath,
 		ReloadFunc: reload,
 		Stats:      &statsapi.API{Store: st},
+		Store:      st,
 	}
 	if cfg.Metrics.Enabled {
 		ah.MetricsHandler = mc.Handler(func() {
@@ -118,7 +139,7 @@ func main() {
 		}
 	}()
 	log.Printf("pull events: sqlite (%s)", cfg.Storage.DSN)
-	log.Printf("stats UI: http://%s/stats/ (Bearer token required)", cfg.Server.AdminListen)
+	log.Printf("stats UI: http://%s/stats/login.html (web login required)", cfg.Server.AdminListen)
 	if cfg.Metrics.Enabled {
 		log.Printf("metrics: http://%s/metrics (auth required)", cfg.Server.AdminListen)
 	}

@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>登录 · EDP Console</title>
+  <link rel="icon" href="/stats/favicon.svg" type="image/svg+xml" />
+  <script>
+    (function () {
+      var t = localStorage.getItem("edp_theme");
+      if (t !== "light" && t !== "dark") {
+        t = window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+      }
+      document.documentElement.classList.add("theme-" + t);
+    })();
+  </script>
+  <link rel="stylesheet" href="/stats/css/app.css" />
+</head>
+<body>
+  <div class="login-page">
+    <div class="login-topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span>EDP Console</span>
+      </div>
+      <div class="login-topbar-actions" id="login-theme-slot"></div>
+    </div>
+
+    <div class="login-main">
+      <div class="glass login-card">
+        <h1>登录</h1>
+        <p class="lead">easy-docker-proxy 拉取分析控制台。请使用管理员账号登录。</p>
+        <div id="err" class="error-banner" hidden role="alert"></div>
+        <form id="form" autocomplete="on" novalidate>
+          <div class="field">
+            <label for="username">用户名</label>
+            <input class="input" id="username" name="username" required autocomplete="username" />
+          </div>
+          <div class="field">
+            <label for="password">密码</label>
+            <input class="input" id="password" name="password" type="password" required autocomplete="current-password" minlength="8" />
+          </div>
+          <button class="btn btn-primary" type="submit" id="submit">进入控制台</button>
+        </form>
+        <p class="login-foot">首次部署请设置 <code>PROXY_WEB_PASSWORD</code>（可选 <code>PROXY_WEB_USER</code>，默认 admin）</p>
+      </div>
+    </div>
+
+    <footer class="site-footer login-footer" id="app-footer"></footer>
+  </div>
+  <script src="/stats/js/app.js"></script>
+  <script>
+    (function () {
+      function showErr(msg) {
+        var err = document.getElementById("err");
+        err.hidden = false;
+        err.textContent = msg;
+      }
+      function safeNext() {
+        var n = new URLSearchParams(location.search).get("next") || "/stats/index.html";
+        if (n.startsWith("/stats/") && !n.startsWith("//")) return n;
+        return "/stats/index.html";
+      }
+      function resetBtn() {
+        var btn = document.getElementById("submit");
+        btn.disabled = false;
+        btn.textContent = "进入控制台";
+      }
+
+      try {
+        if (!window.EDP) throw new Error("前端脚本未加载，请强制刷新 (Cmd+Shift+R)");
+        EDP.ensureFavicon();
+        document.getElementById("login-theme-slot").innerHTML =
+          EDP.themeToggleHTML() + EDP.githubLinkHTML();
+        EDP.wireThemeButton();
+        EDP.renderFooter();
+      } catch (ex) {
+        showErr(ex.message || String(ex));
+      }
+
+      // auto-login only if token exists
+      (async function () {
+        if (!window.EDP || !EDP.getToken()) return;
+        try {
+          await EDP.api("/api/v1/auth/me");
+          location.replace(safeNext());
+        } catch (_) {
+          EDP.clearSession();
+        }
+      })();
+
+      var form = document.getElementById("form");
+      form.addEventListener("submit", async function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        var err = document.getElementById("err");
+        err.hidden = true;
+        var btn = document.getElementById("submit");
+        var username = document.getElementById("username").value.trim();
+        var password = document.getElementById("password").value;
+        if (!username || !password) {
+          showErr("请输入用户名和密码");
+          return;
+        }
+        if (password.length < 8) {
+          showErr("密码至少 8 位");
+          return;
+        }
+        btn.disabled = true;
+        btn.textContent = "登录中…";
+        var ctrl = new AbortController();
+        var timer = setTimeout(function () { ctrl.abort(); }, 15000);
+        try {
+          var res = await fetch("/api/v1/auth/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Accept: "application/json" },
+            body: JSON.stringify({ username: username, password: password }),
+            signal: ctrl.signal,
+            cache: "no-store",
+          });
+          clearTimeout(timer);
+          var data = {};
+          try { data = await res.json(); } catch (_) {}
+          if (!res.ok) throw new Error((data && data.error) || ("登录失败 (" + res.status + ")"));
+          if (!data.token) throw new Error("登录响应缺少 token");
+          EDP.setSession(data.token, data.user);
+          // hard navigate
+          window.location.href = safeNext();
+        } catch (ex) {
+          clearTimeout(timer);
+          var msg = ex.name === "AbortError" ? "登录超时，请检查服务是否在运行" : (ex.message || "登录失败");
+          showErr(msg);
+          resetBtn();
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

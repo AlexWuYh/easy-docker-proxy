@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>镜像列表 · EDP Console</title>
+  <link rel="icon" href="/stats/favicon.svg" type="image/svg+xml" />
+  <script>
+    (function () {
+      var t = localStorage.getItem("edp_theme");
+      if (t !== "light" && t !== "dark") {
+        t = window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+      }
+      document.documentElement.classList.add("theme-" + t);
+    })();
+  </script>
+  <link rel="stylesheet" href="/stats/css/app.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topnav" id="app-nav"></header>
+    <main class="main">
+      <div class="page-head">
+        <div>
+          <h1>镜像列表</h1>
+          <div class="sub">按镜像名合并 · 点击查看 Tag 明细与分析</div>
+        </div>
+        <div class="toolbar">
+          <input class="input" id="q" type="search" placeholder="搜索 registry / 镜像 / tag" style="min-width:14rem" />
+          <button type="button" class="btn btn-primary" id="btn-search">搜索</button>
+        </div>
+      </div>
+      <div id="load-error" class="error-banner" hidden></div>
+      <section class="glass panel">
+        <div class="panel-head">
+          <h2>全部镜像 <span id="total-hint" style="font-weight:400;text-transform:none;letter-spacing:0"></span></h2>
+        </div>
+        <div class="table-wrap" id="list"></div>
+        <div class="toolbar" style="margin-top:1rem;justify-content:flex-end">
+          <button type="button" class="btn btn-ghost" id="btn-prev">上一页</button>
+          <span class="user-chip" id="page-hint">—</span>
+          <button type="button" class="btn btn-ghost" id="btn-next">下一页</button>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="/stats/js/app.js"></script>
+  <script>
+    if (!EDP.requireAuth()) throw new Error("auth");
+    EDP.renderNav("images");
+
+    let offset = 0;
+    const limit = 30;
+    let total = 0;
+
+    async function load() {
+      const err = document.getElementById("load-error");
+      err.hidden = true;
+      const q = document.getElementById("q").value.trim();
+      try {
+        const data = await EDP.api(`/api/v1/images?limit=${limit}&offset=${offset}&q=${encodeURIComponent(q)}`);
+        total = data.total || 0;
+        document.getElementById("total-hint").textContent = `· ${total} 个仓库`;
+        document.getElementById("page-hint").textContent = total
+          ? `${offset + 1}–${Math.min(offset + limit, total)} / ${total}`
+          : "0";
+        const rows = (data.items || []).map(im => {
+          const href = `/stats/image.html?registry=${encodeURIComponent(im.registry)}&repository=${encodeURIComponent(im.repository)}`;
+          const analysis = `/stats/index.html`; // detail page has analysis
+          return `<tr class="clickable" data-href="${href}">
+            <td class="mono">${EDP.esc(im.registry)}</td>
+            <td class="mono"><strong>${EDP.esc(im.repository)}</strong></td>
+            <td>${im.pulls}</td>
+            <td>${im.tag_count}</td>
+            <td>${EDP.formatBytes(im.bytes_total)}</td>
+            <td>${im.errors}</td>
+            <td>${EDP.fmtTime(im.last_pull_ts)}</td>
+            <td class="mono">${EDP.esc(im.last_reference || "—")}</td>
+            <td>
+              <a href="${href}">Tag 明细</a>
+              · <a href="${href}#analysis">分析</a>
+            </td>
+          </tr>`;
+        }).join("");
+        document.getElementById("list").innerHTML = rows
+          ? `<table class="data"><thead><tr>
+              <th>Registry</th><th>镜像</th><th>Pulls</th><th>Tags</th><th>流量</th><th>错误</th><th>最近拉取</th><th>最近 Tag</th><th>操作</th>
+            </tr></thead><tbody>${rows}</tbody></table>`
+          : '<p class="empty">暂无镜像拉取记录</p>';
+        document.querySelectorAll("tr.clickable[data-href]").forEach(tr => {
+          tr.addEventListener("click", (e) => {
+            if (e.target.tagName === "A") return;
+            location.href = tr.getAttribute("data-href");
+          });
+        });
+      } catch (e) {
+        err.hidden = false;
+        err.textContent = e.message;
+      }
+    }
+
+    document.getElementById("btn-search").addEventListener("click", () => { offset = 0; load(); });
+    document.getElementById("q").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { offset = 0; load(); }
+    });
+    document.getElementById("btn-prev").addEventListener("click", () => {
+      offset = Math.max(0, offset - limit); load();
+    });
+    document.getElementById("btn-next").addEventListener("click", () => {
+      if (offset + limit < total) { offset += limit; load(); }
+    });
+    load();
+  </script>
+</body>
+</html>

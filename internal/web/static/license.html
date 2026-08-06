@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MIT License · easy-docker-proxy</title>
+  <link rel="icon" href="/stats/favicon.svg" type="image/svg+xml" />
+  <script>
+    (function () {
+      var t = localStorage.getItem("edp_theme");
+      if (t !== "light" && t !== "dark") {
+        t = window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+      }
+      document.documentElement.classList.add("theme-" + t);
+    })();
+  </script>
+  <link rel="stylesheet" href="/stats/css/app.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topnav" id="app-nav-public"></header>
+    <main class="main">
+      <div class="page-head">
+        <div>
+          <h1>MIT License</h1>
+          <div class="sub">easy-docker-proxy · Copyright (c) 2026 alex_wuyh</div>
+        </div>
+        <div class="toolbar">
+          <a class="btn btn-ghost" href="/stats/index.html">返回控制台</a>
+          <a class="btn btn-primary" href="https://github.com/AlexWuYh/easy-docker-proxy/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">在 GitHub 查看</a>
+        </div>
+      </div>
+      <section class="glass panel">
+        <pre class="license-body">MIT License
+
+Copyright (c) 2026 alex_wuyh
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.</pre>
+      </section>
+    </main>
+    <div id="app-footer"></div>
+  </div>
+  <script src="/stats/js/app.js"></script>
+  <script>
+    EDP.ensureFavicon();
+    document.getElementById("app-nav-public").innerHTML = `
+      <a class="brand" href="/stats/index.html">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span>EDP Console</span>
+      </a>
+      <div class="nav-right">
+        ${EDP.themeToggleHTML()}
+        ${EDP.githubLinkHTML()}
+      </div>`;
+    EDP.wireThemeButton();
+    EDP.renderFooter();
+  </script>
+</body>
+</html>

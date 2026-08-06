@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>镜像详情 · EDP Console</title>
+  <link rel="icon" href="/stats/favicon.svg" type="image/svg+xml" />
+  <script>
+    (function () {
+      var t = localStorage.getItem("edp_theme");
+      if (t !== "light" && t !== "dark") {
+        t = window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+      }
+      document.documentElement.classList.add("theme-" + t);
+    })();
+  </script>
+  <link rel="stylesheet" href="/stats/css/app.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topnav" id="app-nav"></header>
+    <main class="main">
+      <div class="page-head">
+        <div>
+          <h1 id="title">镜像详情</h1>
+          <div class="sub" id="subtitle">—</div>
+        </div>
+        <div class="toolbar">
+          <a class="btn btn-ghost" href="/stats/images.html">← 镜像列表</a>
+          <a class="btn btn-primary" href="/stats/index.html">分析看板</a>
+          <select id="range" class="input" aria-label="时间范围">
+            <option value="7d" selected>近 7 日</option>
+            <option value="14d">近 14 日</option>
+            <option value="30d">近 30 日</option>
+          </select>
+        </div>
+      </div>
+      <div id="load-error" class="error-banner" hidden></div>
+
+      <section class="glass panel" id="analysis">
+        <div class="panel-head"><h2>拉取趋势（本镜像）</h2></div>
+        <div class="chart-wrap"><canvas id="chart" aria-label="镜像趋势"></canvas></div>
+      </section>
+
+      <section class="glass panel" style="margin-top:1rem">
+        <div class="panel-head"><h2>Tag / Digest 列表</h2></div>
+        <div class="table-wrap" id="tags"></div>
+      </section>
+    </main>
+  </div>
+  <script src="/stats/js/app.js"></script>
+  <script>
+    if (!EDP.requireAuth()) throw new Error("auth");
+    EDP.renderNav("images");
+
+    const params = new URLSearchParams(location.search);
+    const registry = params.get("registry") || "";
+    const repository = params.get("repository") || "";
+    document.getElementById("title").textContent = repository || "镜像详情";
+    document.getElementById("subtitle").textContent = registry ? `${registry} / ${repository}` : "缺少参数";
+
+    let chart;
+    async function load() {
+      const err = document.getElementById("load-error");
+      err.hidden = true;
+      if (!registry || !repository) {
+        err.hidden = false;
+        err.textContent = "缺少 registry 或 repository 参数";
+        return;
+      }
+      const range = document.getElementById("range").value;
+      try {
+        const [tags, ts] = await Promise.all([
+          EDP.api(`/api/v1/images/tags?registry=${encodeURIComponent(registry)}&repository=${encodeURIComponent(repository)}`),
+          EDP.api(`/api/v1/images/timeseries?registry=${encodeURIComponent(registry)}&repository=${encodeURIComponent(repository)}&range=${encodeURIComponent(range)}`),
+        ]);
+        const rows = (tags.items || []).map(t => `<tr>
+          <td class="mono">${EDP.esc(t.reference || "(empty)")}</td>
+          <td>${t.pulls}</td>
+          <td>${EDP.formatBytes(t.bytes_total)}</td>
+          <td>${t.errors}</td>
+          <td>${EDP.fmtTime(t.last_pull_ts)}</td>
+          <td>${EDP.fmtTime(t.first_pull_ts)}</td>
+        </tr>`).join("");
+        document.getElementById("tags").innerHTML = rows
+          ? `<table class="data"><thead><tr>
+              <th>Tag / Digest</th><th>Pulls</th><th>Bytes</th><th>Errors</th><th>最近</th><th>首次</th>
+            </tr></thead><tbody>${rows}</tbody></table>`
+          : '<p class="empty">暂无 tag 记录</p>';
+
+        if (typeof Chart !== "undefined") {
+          const c = EDP.chartColors();
+          const pts = ts.points || [];
+          if (chart) chart.destroy();
+          chart = new Chart(document.getElementById("chart"), {
+            type: "line",
+            data: {
+              labels: pts.map(p => p.day.slice(5)),
+              datasets: [
+                { label: "Pulls", data: pts.map(p => p.pulls), borderColor: c.blue, backgroundColor: c.blueFill, fill: true, tension: 0.3 },
+                { label: "Errors", data: pts.map(p => p.errors), borderColor: c.red, tension: 0.3 },
+              ],
+            },
+            options: {
+              responsive: true, maintainAspectRatio: false,
+              plugins: { legend: { labels: { color: c.legend } } },
+              scales: {
+                x: { ticks: { color: c.tick }, grid: { color: c.grid } },
+                y: { ticks: { color: c.tick }, grid: { color: c.grid } },
+              },
+            },
+          });
+        }
+        if (location.hash === "#analysis") {
+          document.getElementById("analysis").scrollIntoView({ behavior: "smooth" });
+        }
+      } catch (e) {
+        err.hidden = false;
+        err.textContent = e.message;
+      }
+    }
+    document.getElementById("range").addEventListener("change", load);
+    window.addEventListener("load", load);
+  </script>
+</body>
+</html>

@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>账号管理 · EDP Console</title>
+  <link rel="icon" href="/stats/favicon.svg" type="image/svg+xml" />
+  <script>
+    (function () {
+      var t = localStorage.getItem("edp_theme");
+      if (t !== "light" && t !== "dark") {
+        t = window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+      }
+      document.documentElement.classList.add("theme-" + t);
+    })();
+  </script>
+  <link rel="stylesheet" href="/stats/css/app.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topnav" id="app-nav"></header>
+    <main class="main">
+      <div class="page-head">
+        <div>
+          <h1>账号管理</h1>
+          <div class="sub">控制台登录账号 · 管理员可增删用户</div>
+        </div>
+      </div>
+      <div id="load-error" class="error-banner" hidden></div>
+
+      <section class="glass panel" style="margin-bottom:1rem">
+        <div class="panel-head"><h2>当前用户</h2></div>
+        <p id="me-info" class="empty">—</p>
+        <div class="form-row" style="grid-template-columns:1fr auto">
+          <div class="field" style="margin:0">
+            <label for="my-pass">修改我的密码</label>
+            <input class="input" id="my-pass" type="password" minlength="8" placeholder="至少 8 位" autocomplete="new-password" />
+          </div>
+          <button type="button" class="btn btn-primary" id="btn-my-pass">更新密码</button>
+        </div>
+      </section>
+
+      <section class="glass panel" id="admin-panel" hidden>
+        <div class="panel-head"><h2>用户列表</h2></div>
+        <div class="form-row">
+          <div class="field" style="margin:0">
+            <label for="new-user">新用户名</label>
+            <input class="input" id="new-user" autocomplete="off" />
+          </div>
+          <div class="field" style="margin:0">
+            <label for="new-pass">密码</label>
+            <input class="input" id="new-pass" type="password" minlength="8" autocomplete="new-password" />
+          </div>
+          <div class="field" style="margin:0">
+            <label for="new-role">角色</label>
+            <select class="input" id="new-role">
+              <option value="viewer">viewer</option>
+              <option value="admin">admin</option>
+            </select>
+          </div>
+        </div>
+        <button type="button" class="btn btn-accent" id="btn-create" style="margin-bottom:1rem">创建用户</button>
+        <div class="table-wrap" id="users"></div>
+      </section>
+    </main>
+  </div>
+  <script src="/stats/js/app.js"></script>
+  <script>
+    if (!EDP.requireAuth()) throw new Error("auth");
+    EDP.renderNav("accounts");
+
+    async function loadMe() {
+      const me = await EDP.api("/api/v1/auth/me");
+      sessionStorage.setItem("edp_session_user", JSON.stringify(me));
+      document.getElementById("me-info").innerHTML =
+        `<span class="badge badge-info">${EDP.esc(me.role)}</span> ` +
+        `<strong class="mono">${EDP.esc(me.username)}</strong> · id ${me.id}`;
+      if (me.role === "admin") {
+        document.getElementById("admin-panel").hidden = false;
+        await loadUsers();
+      }
+      return me;
+    }
+
+    async function loadUsers() {
+      const data = await EDP.api("/api/v1/users");
+      const me = EDP.getUser();
+      const rows = (data.items || []).map(u => `<tr>
+        <td>${u.id}</td>
+        <td class="mono">${EDP.esc(u.username)}</td>
+        <td><span class="badge badge-info">${EDP.esc(u.role)}</span></td>
+        <td>${EDP.fmtTime(u.created_at)}</td>
+        <td>
+          ${me && me.id !== u.id
+            ? `<button type="button" class="btn btn-danger" data-del="${u.id}" style="min-height:36px;font-size:0.8rem">删除</button>`
+            : "—"}
+        </td>
+      </tr>`).join("");
+      document.getElementById("users").innerHTML = `
+        <table class="data"><thead><tr>
+          <th>ID</th><th>用户名</th><th>角色</th><th>创建时间</th><th></th>
+        </tr></thead><tbody>${rows || ""}</tbody></table>`;
+      document.querySelectorAll("[data-del]").forEach(btn => {
+        btn.addEventListener("click", async () => {
+          if (!confirm("确认删除该用户？")) return;
+          try {
+            await EDP.api("/api/v1/users/" + btn.getAttribute("data-del"), { method: "DELETE" });
+            await loadUsers();
+          } catch (e) {
+            alert(e.message);
+          }
+        });
+      });
+    }
+
+    document.getElementById("btn-my-pass").addEventListener("click", async () => {
+      const me = EDP.getUser();
+      const pw = document.getElementById("my-pass").value;
+      try {
+        await EDP.api("/api/v1/users/" + me.id + "/password", {
+          method: "PUT",
+          body: JSON.stringify({ password: pw }),
+        });
+        alert("密码已更新，请重新登录");
+        EDP.clearSession();
+        location.href = "/stats/login.html";
+      } catch (e) {
+        alert(e.message);
+      }
+    });
+
+    document.getElementById("btn-create").addEventListener("click", async () => {
+      try {
+        await EDP.api("/api/v1/users", {
+          method: "POST",
+          body: JSON.stringify({
+            username: document.getElementById("new-user").value.trim(),
+            password: document.getElementById("new-pass").value,
+            role: document.getElementById("new-role").value,
+          }),
+        });
+        document.getElementById("new-user").value = "";
+        document.getElementById("new-pass").value = "";
+        await loadUsers();
+      } catch (e) {
+        alert(e.message);
+      }
+    });
+
+    loadMe().catch(e => {
+      const err = document.getElementById("load-error");
+      err.hidden = false;
+      err.textContent = e.message;
+    });
+  </script>
+</body>
+</html>
