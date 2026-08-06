@@ -1,0 +1,32 @@
+# Scaffold compose file — wire up after M1+ is implemented.
+services:
+  proxy:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: easy-docker-proxy:local
+    restart: unless-stopped
+    environment:
+      PROXY_ADMIN_TOKEN: ${PROXY_ADMIN_TOKEN:?set PROXY_ADMIN_TOKEN}
+      DOCKERHUB_USER: ${DOCKERHUB_USER:-}
+      DOCKERHUB_TOKEN: ${DOCKERHUB_TOKEN:-}
+    volumes:
+      - ../configs/config.yaml:/etc/proxy/config.yaml:ro
+      - proxy-data:/data
+    ports:
+      # Data plane only. Do NOT publish admin_listen (5001) to the public internet.
+      - "5000:5000"
+    # Intentionally NO docker.sock mount.
+
+  # Optional edge TLS terminator — configure hostnames in Caddyfile
+  # caddy:
+  #   image: caddy:2
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./Caddyfile:/etc/caddy/Caddyfile:ro
+  #     - caddy-data:/data
+
+volumes:
+  proxy-data:

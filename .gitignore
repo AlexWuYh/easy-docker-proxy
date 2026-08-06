@@ -1,0 +1,29 @@
+# Binaries
+/bin/
+/dist/
+/proxy
+*.exe
+
+# Config & secrets
+configs/config.yaml
+.env
+*.pem
+*.key
+
+# Data
+/data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Go
+vendor/
+coverage.out
+*.test

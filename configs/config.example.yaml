@@ -1,0 +1,98 @@
+# easy-docker-proxy example configuration
+# Copy to config.yaml and adjust hosts / secrets via environment variables.
+
+server:
+  # Registry data plane (public via reverse proxy)
+  listen: ":5000"
+  # Admin + Stats API (keep on loopback in production)
+  admin_listen: "127.0.0.1:5001"
+  read_timeout: 60
+  write_timeout: 0
+  idle_timeout: 120
+
+default: dockerhub
+log_level: normal # quiet | normal | debug
+
+# Only these proxies may supply X-Forwarded-For / X-Real-IP
+trusted_proxies:
+  - "127.0.0.1/32"
+  - "10.0.0.0/8"
+  - "172.16.0.0/12"
+  - "192.168.0.0/16"
+
+access_control:
+  # off | whitelist | blacklist
+  # Recommend whitelist when exposing to the internet
+  mode: off
+  whitelist: []
+  # - "10.0.0.0/8"
+  blacklist: []
+
+rate_limit:
+  enabled: true
+  per_ip_rps: 20
+  per_ip_burst: 40
+
+storage:
+  driver: sqlite
+  dsn: "file:data/proxy.db?_pragma=busy_timeout(5000)"
+  event_retention_days: 30
+  aggregate_retention_days: 365
+
+admin:
+  # Prefer env PROXY_ADMIN_TOKEN (required for admin/stats)
+  token_env: PROXY_ADMIN_TOKEN
+  stats_require_auth: true
+
+registries:
+  - name: dockerhub
+    enabled: true
+    hosts:
+      - "hub.example.com"
+    upstream: "https://registry-1.docker.io"
+    auth:
+      type: token
+      # Optional: reduce Hub rate limits / private pulls
+      username: "${DOCKERHUB_USER}"
+      password: "${DOCKERHUB_TOKEN}"
+    token_cache_ttl: 3600
+
+  - name: ghcr
+    enabled: true
+    hosts:
+      - "ghcr.example.com"
+    upstream: "https://ghcr.io"
+    auth:
+      type: token
+
+  - name: quay
+    enabled: true
+    hosts:
+      - "quay.example.com"
+    upstream: "https://quay.io"
+    auth:
+      type: token
+
+  - name: k8s
+    enabled: true
+    hosts:
+      - "k8s.example.com"
+    upstream: "https://registry.k8s.io"
+    auth:
+      type: token
+
+  - name: mcr
+    enabled: true
+    hosts:
+      - "mcr.example.com"
+    upstream: "https://mcr.microsoft.com"
+    auth:
+      type: token
+
+  - name: nvcr
+    enabled: true
+    hosts:
+      - "nvcr.example.com"
+    upstream: "https://nvcr.io"
+    auth:
+      type: token
