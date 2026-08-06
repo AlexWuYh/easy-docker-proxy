@@ -1,20 +1,19 @@
-# easy-docker-proxy example configuration
-# Copy to config.yaml and adjust hosts / secrets via environment variables.
+# Container-oriented config (paths match deploy/Dockerfile + compose volumes).
+# Copy to configs/config.yaml or mount as /etc/proxy/config.yaml.
 
 server:
-  # Registry data plane (public via reverse proxy).
-  # Note: on macOS, :5000 is often taken by AirPlay Receiver — use e.g. ":15000" for local dev.
   listen: ":5000"
-  # Admin + Stats API (keep on loopback in production)
-  admin_listen: "127.0.0.1:5001"
+  # Reachable on the docker network for optional private stats reverse-proxy.
+  # Compose does NOT publish this port publicly by default.
+  admin_listen: "0.0.0.0:5001"
   read_timeout: 60
   write_timeout: 0
   idle_timeout: 120
 
 default: dockerhub
-log_level: normal # quiet | normal | debug
+log_level: normal
 
-# Only these proxies may supply X-Forwarded-For / X-Real-IP
+# Caddy/edge on the compose network — trust private ranges for XFF / X-Forwarded-Host.
 trusted_proxies:
   - "127.0.0.1/32"
   - "10.0.0.0/8"
@@ -22,11 +21,12 @@ trusted_proxies:
   - "192.168.0.0/16"
 
 access_control:
-  # off | whitelist | blacklist
-  # Recommend whitelist when exposing to the internet
+  # Strongly recommended when the data plane is reachable from the internet:
+  # mode: whitelist
+  # whitelist:
+  #   - "10.0.0.0/8"
   mode: off
   whitelist: []
-  # - "10.0.0.0/8"
   blacklist: []
 
 rate_limit:
@@ -34,26 +34,21 @@ rate_limit:
   per_ip_rps: 20
   per_ip_burst: 40
 
-# Upstream hostname allowlist (SSRF hardening). Empty hosts → built-in public registries.
+# SSRF protection: upstream hosts must be listed (defaults cover Hub/GHCR/…).
 upstream_allowlist:
   enabled: true
-  # hosts:
-  #   - registry-1.docker.io
-  #   - ghcr.io
+  # hosts: []  # empty → built-in public registry list
 
-# Prometheus text metrics on admin plane: GET /metrics (requires admin token)
 metrics:
-  enabled: false
+  enabled: true
 
 storage:
   driver: sqlite
-  # Relative paths create parent dirs automatically. Only metadata — never image layers.
-  dsn: "file:data/proxy.db?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+  dsn: "file:/data/proxy.db?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
   event_retention_days: 30
   aggregate_retention_days: 365
 
 admin:
-  # Prefer env PROXY_ADMIN_TOKEN (required for admin/stats)
   token_env: PROXY_ADMIN_TOKEN
   stats_require_auth: true
 
@@ -65,7 +60,6 @@ registries:
     upstream: "https://registry-1.docker.io"
     auth:
       type: token
-      # Optional: reduce Hub rate limits / private pulls
       username: "${DOCKERHUB_USER}"
       password: "${DOCKERHUB_TOKEN}"
     token_cache_ttl: 3600

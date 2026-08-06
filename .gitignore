@@ -27,3 +27,12 @@ configs/config.yaml
 vendor/
 coverage.out
 *.test
+
+# AI / agent local docs (not for public repo)
+.ai/
+AGENTS.md
+Agents.md
+CLAUDE.md
+CLAUDE.local.md
+.cursor/
+.grok/

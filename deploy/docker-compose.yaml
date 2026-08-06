@@ -1,4 +1,15 @@
-# Scaffold compose file — wire up after M1+ is implemented.
+# Production-oriented compose: proxy (+ optional Caddy edge).
+# Usage (from repo root):
+#   cp .env.example .env && edit PROXY_ADMIN_TOKEN
+#   cp configs/config.docker.yaml configs/config.yaml  # or customize
+#   docker compose -f deploy/docker-compose.yaml up -d --build
+#
+# Security defaults:
+#   - Admin/stats NOT published to host (only docker network)
+#   - No docker.sock
+#   - non-root image user
+#   - optional read-only rootfs
+
 services:
   proxy:
     build:
@@ -7,26 +18,48 @@ services:
     image: easy-docker-proxy:local
     restart: unless-stopped
     environment:
-      PROXY_ADMIN_TOKEN: ${PROXY_ADMIN_TOKEN:?set PROXY_ADMIN_TOKEN}
+      PROXY_ADMIN_TOKEN: ${PROXY_ADMIN_TOKEN:?set PROXY_ADMIN_TOKEN in .env}
       DOCKERHUB_USER: ${DOCKERHUB_USER:-}
       DOCKERHUB_TOKEN: ${DOCKERHUB_TOKEN:-}
     volumes:
       - ../configs/config.yaml:/etc/proxy/config.yaml:ro
       - proxy-data:/data
     ports:
-      # Data plane only. Do NOT publish admin_listen (5001) to the public internet.
+      # Data plane only. Never map 5001 to 0.0.0.0 on a public VPS.
       - "5000:5000"
+    # Optional local-only stats access (uncomment for debugging on the host):
+    # - "127.0.0.1:5001:5001"
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    networks:
+      - proxy-net
     # Intentionally NO docker.sock mount.
 
-  # Optional edge TLS terminator — configure hostnames in Caddyfile
-  # caddy:
-  #   image: caddy:2
-  #   ports:
-  #     - "80:80"
-  #     - "443:443"
-  #   volumes:
-  #     - ./Caddyfile:/etc/caddy/Caddyfile:ro
-  #     - caddy-data:/data
+  # Edge TLS + Host routing. Enable when DNS points to this host.
+  caddy:
+    profiles: ["edge"]
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - proxy-net
+    depends_on:
+      - proxy
 
 volumes:
   proxy-data:
+  caddy-data:
+  caddy-config:
+
+networks:
+  proxy-net:
+    driver: bridge

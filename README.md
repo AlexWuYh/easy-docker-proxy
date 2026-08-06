@@ -7,34 +7,54 @@
 - **简单 Stats 页**：只读看板（Pulls、流量、热门镜像、客户端、错误）
 - **安全默认**：无 Docker socket、无容器管理、管理面本机监听 + 强 Token
 
-> 状态：脚手架阶段（M0）。数据面与统计能力按 [`.ai/01_DESIGN.md`](./.ai/01_DESIGN.md) 分阶段实现。
+> 状态：**M0–M4 已完成**（数据面 + 记录 + Stats + 部署硬化）。可选增强见 M5。
 
 ## 功能规划
 
-| 阶段 | 内容 |
-|------|------|
-| M1 | Host 路由、上游 Token 换发、流式代理、ACL、限流 |
-| M2 | 拉取事件 + SQLite 聚合 |
-| M3 | Stats Web（鉴权） |
-| M4 | 部署硬化、文档、可选 Prometheus |
+| 阶段 | 状态 | 内容 |
+|------|------|------|
+| M1 | done | Host 路由、上游 Token 换发、流式代理、ACL、限流、热重载 |
+| M2 | done | 拉取事件 + SQLite 日聚合（异步、不阻塞 pull） |
+| M3 | done | Stats Web（鉴权只读看板） |
+| M4 | done | 部署硬化、upstream allowlist、可选 Prometheus `/metrics` |
 
-详见 [设计方案](./.ai/01_DESIGN.md)。
-
-## 快速开始（脚手架）
+## 快速开始
 
 ### 依赖
 
 - Go 1.22+
 - （可选）Docker / Docker Compose
 
-### 本地运行（占位入口）
+### 本地运行
 
 ```bash
 cp configs/config.example.yaml configs/config.yaml
+# 建议按域名修改 registries[].hosts；macOS 上 :5000 常被 AirPlay 占用，可改 listen
 export PROXY_ADMIN_TOKEN="$(openssl rand -hex 32)"
+# 可选：降低 Docker Hub 限流
+# export DOCKERHUB_USER=...
+# export DOCKERHUB_TOKEN=...
 
-# 当前 main 为脚手架占位，实现完成后：
 go run ./cmd/proxy -config configs/config.yaml
+```
+
+数据面默认 `:5000`，管理面默认 `127.0.0.1:5001`。  
+拉取元数据写入 `storage.dsn`（默认 `data/proxy.db`），**不**缓存镜像层。
+
+```bash
+# API 版本握手
+curl -H 'Host: hub.example.com' http://127.0.0.1:5000/v2/
+
+# 管理面（需 token）
+curl -H "Authorization: Bearer $PROXY_ADMIN_TOKEN" http://127.0.0.1:5001/-/config
+curl -X POST -H "Authorization: Bearer $PROXY_ADMIN_TOKEN" http://127.0.0.1:5001/-/reload
+
+# Stats 看板（浏览器）
+open "http://127.0.0.1:5001/stats/?token=$PROXY_ADMIN_TOKEN"
+
+# Stats API
+curl -H "Authorization: Bearer $PROXY_ADMIN_TOKEN" \
+  'http://127.0.0.1:5001/api/v1/summary?range=7d'
 ```
 
 ### 配置
@@ -42,18 +62,28 @@ go run ./cmd/proxy -config configs/config.yaml
 示例见 [`configs/config.example.yaml`](./configs/config.example.yaml)。  
 密钥请用环境变量注入，勿提交真实密码。
 
-### Compose（规划）
+### Docker Compose
+
+详见 [`deploy/README.md`](./deploy/README.md)。
 
 ```bash
-# 实现完成后
-cp .env.example .env   # 填写 PROXY_ADMIN_TOKEN
-docker compose -f deploy/docker-compose.yaml up -d
+cp .env.example .env          # 设置强 PROXY_ADMIN_TOKEN
+cp configs/config.docker.yaml configs/config.yaml
+# 编辑 hosts / 域名；公网建议开启 access_control whitelist
+
+docker compose -f deploy/docker-compose.yaml up -d --build
+
+# 可选：TLS 边缘（需 DNS + 编辑 deploy/Caddyfile）
+docker compose -f deploy/docker-compose.yaml --profile edge up -d
 ```
 
-## 客户端用法（规划）
+**注意**：compose 默认只发布 **5000**（数据面），**不**发布管理面 5001。
+
+## 客户端用法
+
+前置：DNS 将 `hub.example.com` 等指到代理（或本机 + `/etc/hosts`），边缘 TLS 反代保留正确 `Host`。
 
 ```bash
-# 示例：通过子域名拉取（需 DNS + 反代就绪）
 docker pull hub.example.com/library/nginx:alpine
 docker pull ghcr.example.com/owner/image:tag
 ```
@@ -61,24 +91,20 @@ docker pull ghcr.example.com/owner/image:tag
 ## 项目结构
 
 ```text
-.ai/           # 架构与约束文档（供人与 AI 阅读）
 cmd/proxy/     # 入口
-internal/      # 业务包（见 .ai/02_STRUCTURE.md）
-configs/       # 示例配置
-deploy/        # compose / Caddy
-web/static/    # Stats 前端
+internal/      # 业务包（proxy / store / stats / …）
+configs/       # 示例与 Docker 配置
+deploy/        # Dockerfile / compose / Caddy / 部署说明
+internal/web/  # embed Stats 前端
 ```
 
 ## 文档
 
 | 文档 | 说明 |
 |------|------|
-| [`AGENTS.md`](./AGENTS.md) | AI / 贡献者执行入口与常用命令 |
-| [`.ai/00_PROJECT.md`](./.ai/00_PROJECT.md) | 项目上下文 |
-| [`.ai/01_DESIGN.md`](./.ai/01_DESIGN.md) | 完整设计方案 |
-| [`.ai/02_STRUCTURE.md`](./.ai/02_STRUCTURE.md) | 目录与模块 |
-| [`.ai/03_SECURITY.md`](./.ai/03_SECURITY.md) | 安全强制约束 |
-| [`.ai/MILESTONES.md`](./.ai/MILESTONES.md) | 里程碑与验收 |
+| [`deploy/README.md`](./deploy/README.md) | 部署、安全清单、trusted proxies / allowlist |
+| [`configs/config.example.yaml`](./configs/config.example.yaml) | 配置示例 |
+| [`configs/config.docker.yaml`](./configs/config.docker.yaml) | 容器部署用配置 |
 
 ## 致谢 / Acknowledgments
 

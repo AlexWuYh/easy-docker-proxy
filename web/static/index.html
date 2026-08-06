@@ -2,25 +2,14 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>easy-docker-proxy — Stats</title>
-  <style>
-    :root { font-family: system-ui, sans-serif; color: #0f172a; background: #f8fafc; }
-    body { max-width: 48rem; margin: 3rem auto; padding: 0 1.25rem; }
-    h1 { font-size: 1.5rem; margin-bottom: 0.25rem; }
-    p { color: #475569; line-height: 1.6; }
-    code { background: #e2e8f0; padding: 0.1em 0.35em; border-radius: 4px; }
-    .badge { display: inline-block; background: #fef3c7; color: #92400e;
-             font-size: 0.75rem; padding: 0.2rem 0.5rem; border-radius: 999px; }
-  </style>
+  <meta http-equiv="refresh" content="0; url=/" />
+  <title>Stats source</title>
 </head>
 <body>
-  <p class="badge">scaffold</p>
-  <h1>easy-docker-proxy Stats</h1>
   <p>
-    统计看板将在 <strong>M3</strong> 实现。设计说明见仓库
-    <code>.ai/01_DESIGN.md</code>。
+    运行时嵌入的 Stats 页面位于
+    <code>internal/web/static/index.html</code>（由 <code>embed.FS</code> 打进二进制）。
+    请修改该文件。
   </p>
-  <p>API 前缀规划：<code>/api/v1/*</code>（需 <code>PROXY_ADMIN_TOKEN</code>）。</p>
 </body>
 </html>

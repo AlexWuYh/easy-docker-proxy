@@ -1,25 +1,2 @@
-# Example Caddy reverse proxy for multi-host registry acceleration.
-# Replace example.com and point DNS to this host.
-
-hub.example.com {
-	reverse_proxy proxy:5000 {
-		header_up X-Forwarded-Host {host}
-		header_up X-Forwarded-Proto {scheme}
-		header_up X-Real-IP {remote_host}
-		header_up X-Forwarded-For {remote_host}
-	}
-}
-
-ghcr.example.com {
-	reverse_proxy proxy:5000 {
-		header_up X-Forwarded-Host {host}
-		header_up X-Forwarded-Proto {scheme}
-		header_up X-Real-IP {remote_host}
-		header_up X-Forwarded-For {remote_host}
-	}
-}
-
-# Internal stats (prefer VPN / private DNS + auth at proxy)
-# stats.example.com {
-# 	reverse_proxy proxy:5001
-# }
+# See deploy/Caddyfile for the maintained example used by docker compose (profile: edge).
+# Copy and edit hostnames before enabling the edge profile.

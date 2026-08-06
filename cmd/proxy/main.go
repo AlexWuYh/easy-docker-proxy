@@ -1,34 +1,155 @@
 // Command proxy is the easy-docker-proxy entrypoint.
-//
-// Scaffold stage (M0): validates flags and prints design status.
-// Subsequent milestones implement the registry data plane, pull recording, and stats UI.
+// M1–M4: data plane, pull records, stats UI, deploy hardening metrics.
 // See .ai/01_DESIGN.md.
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/alex_wuyh/easy-docker-proxy/internal/admin"
+	"github.com/alex_wuyh/easy-docker-proxy/internal/config"
+	"github.com/alex_wuyh/easy-docker-proxy/internal/metrics"
+	"github.com/alex_wuyh/easy-docker-proxy/internal/proxy"
+	"github.com/alex_wuyh/easy-docker-proxy/internal/record"
+	"github.com/alex_wuyh/easy-docker-proxy/internal/statsapi"
+	"github.com/alex_wuyh/easy-docker-proxy/internal/store"
 )
 
 func main() {
 	configPath := flag.String("config", "configs/config.yaml", "path to config YAML")
 	flag.Parse()
 
-	if _, err := os.Stat(*configPath); err != nil {
-		log.Printf("warning: config not found at %s (copy configs/config.example.yaml)", *configPath)
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		log.Fatalf("load config: %v", err)
 	}
 
-	token := os.Getenv("PROXY_ADMIN_TOKEN")
+	token := config.AdminToken(cfg)
 	if token == "" {
-		log.Println("warning: PROXY_ADMIN_TOKEN is unset; admin/stats must fail-closed when implemented")
+		log.Printf("warning: %s unset — admin API (except /healthz) is fail-closed", cfg.Admin.TokenEnv)
 	}
 
-	fmt.Println("easy-docker-proxy — scaffold (M0)")
-	fmt.Println("  config:", *configPath)
-	fmt.Println("  design: .ai/01_DESIGN.md")
-	fmt.Println("  status: registry proxy / pull records / stats UI not implemented yet")
-	fmt.Println()
-	fmt.Println("Next: implement internal/proxy (M1). See .ai/00_PROJECT.md")
+	// Pull event store (M2)
+	st, err := store.Open(cfg.Storage)
+	if err != nil {
+		log.Fatalf("open store: %v", err)
+	}
+	defer func() {
+		if err := st.Close(); err != nil {
+			log.Printf("store close: %v", err)
+		}
+	}()
+
+	bgCtx, bgCancel := context.WithCancel(context.Background())
+	defer bgCancel()
+	st.StartRetentionLoop(bgCtx, time.Hour)
+
+	queue := record.NewQueue(st, record.Options{})
+	queue.Start()
+	defer queue.Close()
+
+	mc := metrics.New()
+	p := proxy.New(cfg)
+	p.SetEmitter(queue)
+	p.SetMetrics(mc)
+
+	reload := func() error {
+		next, err := config.Load(*configPath)
+		if err != nil {
+			return err
+		}
+		// Storage DSN is not re-opened on reload (restart to change DB path).
+		p.Reload(next)
+		return nil
+	}
+
+	// Data plane
+	dataSrv := &http.Server{
+		Addr:        cfg.Server.Listen,
+		Handler:     p,
+		ReadTimeout: time.Duration(cfg.Server.ReadTimeout) * time.Second,
+		// WriteTimeout 0: unlimited streaming for large blobs.
+		IdleTimeout: time.Duration(cfg.Server.IdleTimeout) * time.Second,
+	}
+	if cfg.Server.WriteTimeout > 0 {
+		dataSrv.WriteTimeout = time.Duration(cfg.Server.WriteTimeout) * time.Second
+	}
+
+	// Admin plane + Stats + optional metrics
+	ah := &admin.Handler{
+		Proxy:      p,
+		ConfigPath: *configPath,
+		ReloadFunc: reload,
+		Stats:      &statsapi.API{Store: st},
+	}
+	if cfg.Metrics.Enabled {
+		ah.MetricsHandler = mc.Handler(func() {
+			mc.SetEventStats(queue.Written(), queue.Dropped())
+		})
+	}
+	adminHandler := admin.NewMux(ah)
+	adminSrv := &http.Server{
+		Addr:         cfg.Server.AdminListen,
+		Handler:      adminHandler,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
+	errCh := make(chan error, 2)
+	go func() {
+		log.Printf("registry proxy listening on %s", cfg.Server.Listen)
+		if err := dataSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			errCh <- fmt.Errorf("data plane: %w", err)
+		}
+	}()
+	go func() {
+		log.Printf("admin API listening on %s", cfg.Server.AdminListen)
+		if err := adminSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			errCh <- fmt.Errorf("admin plane: %w", err)
+		}
+	}()
+	log.Printf("pull events: sqlite (%s)", cfg.Storage.DSN)
+	log.Printf("stats UI: http://%s/stats/ (Bearer token required)", cfg.Server.AdminListen)
+	if cfg.Metrics.Enabled {
+		log.Printf("metrics: http://%s/metrics (auth required)", cfg.Server.AdminListen)
+	}
+
+	// SIGHUP → reload; SIGINT/SIGTERM → graceful shutdown
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM)
+
+	for {
+		select {
+		case err := <-errCh:
+			log.Fatalf("%v", err)
+		case sig := <-sigCh:
+			switch sig {
+			case syscall.SIGHUP:
+				log.Printf("SIGHUP: reloading config from %s", *configPath)
+				if err := reload(); err != nil {
+					log.Printf("reload error: %v", err)
+				}
+			case syscall.SIGINT, syscall.SIGTERM:
+				log.Printf("shutting down (%v)...", sig)
+				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				_ = dataSrv.Shutdown(ctx)
+				_ = adminSrv.Shutdown(ctx)
+				cancel()
+				bgCancel()
+				if d := queue.Dropped(); d > 0 {
+					log.Printf("events dropped (buffer full): %d", d)
+				}
+				return
+			}
+		}
+	}
 }

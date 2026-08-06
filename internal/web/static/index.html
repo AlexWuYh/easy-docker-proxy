@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>easy-docker-proxy — Stats</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" defer></script>
+  <style>
+    :root {
+      --bg: #0b1220;
+      --panel: #111827;
+      --border: #1f2937;
+      --text: #e5e7eb;
+      --muted: #9ca3af;
+      --accent: #38bdf8;
+      --ok: #34d399;
+      --warn: #fbbf24;
+      --err: #f87171;
+      --radius: 12px;
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh;
+      background: radial-gradient(1200px 600px at 10% -10%, #1e3a5f 0%, transparent 50%),
+                  radial-gradient(900px 500px at 100% 0%, #312e81 0%, transparent 45%),
+                  var(--bg);
+      color: var(--text);
+    }
+    header {
+      display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+      gap: 1rem; padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--border);
+      backdrop-filter: blur(8px); position: sticky; top: 0; z-index: 10;
+      background: rgba(11, 18, 32, 0.85);
+    }
+    header h1 { margin: 0; font-size: 1.15rem; font-weight: 650; letter-spacing: -0.02em; }
+    header .sub { color: var(--muted); font-size: 0.85rem; margin-top: 0.15rem; }
+    .controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+    input, select, button {
+      background: var(--panel); color: var(--text); border: 1px solid var(--border);
+      border-radius: 8px; padding: 0.45rem 0.7rem; font-size: 0.9rem;
+    }
+    input { min-width: 12rem; }
+    button {
+      cursor: pointer; background: linear-gradient(180deg, #0ea5e9, #0284c7);
+      border: none; font-weight: 600;
+    }
+    button:hover { filter: brightness(1.08); }
+    button.secondary { background: var(--panel); border: 1px solid var(--border); font-weight: 500; }
+    main { max-width: 1200px; margin: 0 auto; padding: 1.25rem 1.5rem 3rem; }
+    .auth-banner {
+      display: none; background: #422006; border: 1px solid #854d0e; color: #fde68a;
+      padding: 0.75rem 1rem; border-radius: var(--radius); margin-bottom: 1rem;
+    }
+    .auth-banner.show { display: block; }
+    .grid {
+      display: grid; gap: 1rem;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      margin-bottom: 1.25rem;
+    }
+    .card {
+      background: rgba(17, 24, 39, 0.9); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 1rem 1.1rem;
+    }
+    .card .label { color: var(--muted); font-size: 0.8rem; margin-bottom: 0.35rem; }
+    .card .value { font-size: 1.45rem; font-weight: 700; letter-spacing: -0.02em; }
+    .card .hint { color: var(--muted); font-size: 0.75rem; margin-top: 0.25rem; }
+    .row { display: grid; gap: 1rem; grid-template-columns: 1.4fr 1fr; margin-bottom: 1.25rem; }
+    @media (max-width: 900px) { .row { grid-template-columns: 1fr; } }
+    .panel { background: rgba(17, 24, 39, 0.9); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; }
+    .panel h2 { margin: 0 0 0.75rem; font-size: 0.95rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+    canvas { max-height: 280px; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    th, td { text-align: left; padding: 0.45rem 0.4rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; }
+    tr:hover td { background: rgba(56, 189, 248, 0.05); }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; }
+    .status-ok { color: var(--ok); }
+    .status-err { color: var(--err); }
+    .empty { color: var(--muted); font-size: 0.9rem; padding: 0.5rem 0; }
+    .error-msg { color: var(--err); font-size: 0.9rem; margin: 0.5rem 0; }
+    footer { color: var(--muted); font-size: 0.75rem; text-align: center; padding: 1rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>easy-docker-proxy Stats</h1>
+      <div class="sub">只读拉取分析 · 需 Admin Token</div>
+    </div>
+    <div class="controls">
+      <input id="token" type="password" placeholder="Admin token" autocomplete="off" />
+      <select id="range">
+        <option value="1d">1 日</option>
+        <option value="7d" selected>7 日</option>
+        <option value="30d">30 日</option>
+      </select>
+      <button id="btn-save" class="secondary" type="button">保存 Token</button>
+      <button id="btn-refresh" type="button">刷新</button>
+    </div>
+  </header>
+  <main>
+    <div id="auth-banner" class="auth-banner">
+      请填写 Admin Token（与 <code>PROXY_ADMIN_TOKEN</code> 相同），或打开
+      <code>/stats/?token=…</code>。保存后写入 sessionStorage，请求使用 Bearer。
+    </div>
+    <div id="load-error" class="error-msg" hidden></div>
+
+    <section class="grid" id="kpis">
+      <div class="card"><div class="label">今日 Pulls</div><div class="value" id="kpi-today-pulls">—</div></div>
+      <div class="card"><div class="label">今日流量</div><div class="value" id="kpi-today-bytes">—</div></div>
+      <div class="card"><div class="label">区间 Pulls</div><div class="value" id="kpi-range-pulls">—</div><div class="hint" id="kpi-range-hint"></div></div>
+      <div class="card"><div class="label">区间流量</div><div class="value" id="kpi-range-bytes">—</div></div>
+      <div class="card"><div class="label">错误率</div><div class="value" id="kpi-error-rate">—</div><div class="hint" id="kpi-errors-hint"></div></div>
+      <div class="card"><div class="label">活跃客户端</div><div class="value" id="kpi-clients">—</div></div>
+    </section>
+
+    <div class="row">
+      <section class="panel">
+        <h2>趋势</h2>
+        <canvas id="chart-ts"></canvas>
+      </section>
+      <section class="panel">
+        <h2>Registry 占比 (Pulls)</h2>
+        <canvas id="chart-reg"></canvas>
+      </section>
+    </div>
+
+    <div class="row">
+      <section class="panel">
+        <h2>热门镜像</h2>
+        <div id="top-repos"></div>
+      </section>
+      <section class="panel">
+        <h2>活跃客户端</h2>
+        <div id="top-clients"></div>
+      </section>
+    </div>
+
+    <div class="row">
+      <section class="panel">
+        <h2>最近失败</h2>
+        <div id="errors"></div>
+      </section>
+      <section class="panel">
+        <h2>最近事件</h2>
+        <div id="events"></div>
+      </section>
+    </div>
+  </main>
+  <footer>easy-docker-proxy · 数据来自本地 SQLite 聚合 · 不展示密钥</footer>
+
+  <script>
+    const TOKEN_KEY = "edp_admin_token";
+    let tsChart = null;
+    let regChart = null;
+
+    function $(id) { return document.getElementById(id); }
+
+    function getToken() {
+      return ($("token").value || sessionStorage.getItem(TOKEN_KEY) || "").trim();
+    }
+
+    function saveToken() {
+      const t = $("token").value.trim();
+      if (t) sessionStorage.setItem(TOKEN_KEY, t);
+      else sessionStorage.removeItem(TOKEN_KEY);
+    }
+
+    function formatBytes(n) {
+      n = Number(n) || 0;
+      if (n < 1024) return n + " B";
+      const u = ["KB", "MB", "GB", "TB"];
+      let i = -1;
+      do { n /= 1024; i++; } while (n >= 1024 && i < u.length - 1);
+      return n.toFixed(n >= 10 || i === 0 ? 1 : 2) + " " + u[i];
+    }
+
+    function formatPct(x) {
+      return ((Number(x) || 0) * 100).toFixed(1) + "%";
+    }
+
+    function fmtTime(ts) {
+      if (!ts) return "—";
+      try { return new Date(ts * 1000).toLocaleString(); } catch { return String(ts); }
+    }
+
+    async function api(path) {
+      const token = getToken();
+      const headers = { "Accept": "application/json" };
+      if (token) headers["Authorization"] = "Bearer " + token;
+      const res = await fetch(path, { headers, cache: "no-store" });
+      if (res.status === 401 || res.status === 503) {
+        $("auth-banner").classList.add("show");
+        throw new Error(res.status === 503 ? "Admin token 未配置 (503)" : "未授权 (401)");
+      }
+      if (!res.ok) {
+        let msg = res.statusText;
+        try { const j = await res.json(); if (j.error) msg = j.error; } catch {}
+        throw new Error(msg);
+      }
+      $("auth-banner").classList.remove("show");
+      return res.json();
+    }
+
+    function table(headers, rowsHtml) {
+      if (!rowsHtml) return '<p class="empty">暂无数据</p>';
+      return "<table><thead><tr>" + headers.map(h => "<th>" + h + "</th>").join("") +
+        "</tr></thead><tbody>" + rowsHtml + "</tbody></table>";
+    }
+
+    function renderRepos(items) {
+      const rows = (items || []).map(r =>
+        `<tr><td class="mono">${esc(r.registry)}</td><td class="mono">${esc(r.repository)}</td>` +
+        `<td>${r.pulls}</td><td>${formatBytes(r.bytes_total)}</td><td>${r.errors}</td></tr>`
+      ).join("");
+      $("top-repos").innerHTML = table(["Registry", "Repository", "Pulls", "Bytes", "Errors"], rows);
+    }
+
+    function renderClients(items) {
+      const rows = (items || []).map(c =>
+        `<tr><td class="mono">${esc(c.client_ip)}</td><td>${c.pulls}</td><td>${formatBytes(c.bytes_total)}</td></tr>`
+      ).join("");
+      $("top-clients").innerHTML = table(["Client IP", "Pulls", "Bytes"], rows);
+    }
+
+    function renderEventList(el, items) {
+      const rows = (items || []).map(e => {
+        const stClass = e.status >= 400 ? "status-err" : "status-ok";
+        return `<tr>
+          <td>${fmtTime(e.ts)}</td>
+          <td class="mono">${esc(e.registry)}</td>
+          <td class="mono">${esc(e.repository)}${e.reference ? ":" + esc(e.reference) : ""}</td>
+          <td>${esc(e.event_type)}</td>
+          <td class="${stClass}">${e.status || "—"}</td>
+          <td class="mono">${esc(e.client_ip)}</td>
+          <td class="mono">${esc(e.error || "")}</td>
+        </tr>`;
+      }).join("");
+      el.innerHTML = table(["Time", "Reg", "Repo", "Type", "Status", "IP", "Error"], rows);
+    }
+
+    function esc(s) {
+      return String(s ?? "").replace(/[&<>"']/g, c => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+      })[c]);
+    }
+
+    function ensureCharts() {
+      if (typeof Chart === "undefined") return false;
+      return true;
+    }
+
+    function updateTimeseries(points) {
+      if (!ensureCharts()) return;
+      const labels = points.map(p => p.day.slice(5));
+      const pulls = points.map(p => p.pulls);
+      const bytes = points.map(p => p.bytes_total);
+      const ctx = $("chart-ts");
+      if (tsChart) tsChart.destroy();
+      tsChart = new Chart(ctx, {
+        type: "line",
+        data: {
+          labels,
+          datasets: [
+            { label: "Pulls", data: pulls, borderColor: "#38bdf8", backgroundColor: "rgba(56,189,248,0.15)", tension: 0.25, yAxisID: "y" },
+            { label: "Bytes", data: bytes, borderColor: "#a78bfa", backgroundColor: "rgba(167,139,250,0.1)", tension: 0.25, yAxisID: "y1" }
+          ]
+        },
+        options: {
+          responsive: true,
+          interaction: { mode: "index", intersect: false },
+          scales: {
+            y: { position: "left", ticks: { color: "#9ca3af" }, grid: { color: "#1f2937" } },
+            y1: { position: "right", ticks: { color: "#9ca3af", callback: v => formatBytes(v) }, grid: { drawOnChartArea: false } },
+            x: { ticks: { color: "#9ca3af" }, grid: { color: "#1f2937" } }
+          },
+          plugins: { legend: { labels: { color: "#e5e7eb" } } }
+        }
+      });
+    }
+
+    function updateRegistryChart(by) {
+      if (!ensureCharts()) return;
+      const labels = (by || []).map(r => r.registry);
+      const data = (by || []).map(r => r.pulls);
+      const colors = ["#38bdf8", "#a78bfa", "#34d399", "#fbbf24", "#f87171", "#fb7185", "#2dd4bf"];
+      const ctx = $("chart-reg");
+      if (regChart) regChart.destroy();
+      regChart = new Chart(ctx, {
+        type: "doughnut",
+        data: {
+          labels: labels.length ? labels : ["无数据"],
+          datasets: [{ data: data.length ? data : [1], backgroundColor: labels.length ? labels.map((_, i) => colors[i % colors.length]) : ["#374151"] }]
+        },
+        options: {
+          plugins: { legend: { position: "bottom", labels: { color: "#e5e7eb" } } }
+        }
+      });
+    }
+
+    async function refresh() {
+      const range = $("range").value;
+      $("load-error").hidden = true;
+      try {
+        const [summary, ts, repos, clients, errors, events] = await Promise.all([
+          api("/api/v1/summary?range=" + encodeURIComponent(range)),
+          api("/api/v1/timeseries?range=" + encodeURIComponent(range) + "&metric=pulls"),
+          api("/api/v1/top/repos?limit=15&range=" + encodeURIComponent(range)),
+          api("/api/v1/top/clients?limit=15&range=" + encodeURIComponent(range)),
+          api("/api/v1/errors?limit=30"),
+          api("/api/v1/events?limit=30")
+        ]);
+
+        $("kpi-today-pulls").textContent = summary.today_pulls ?? 0;
+        $("kpi-today-bytes").textContent = formatBytes(summary.today_bytes);
+        $("kpi-range-pulls").textContent = summary.range_pulls ?? 0;
+        $("kpi-range-hint").textContent = (summary.from_day || "") + " → " + (summary.to_day || "");
+        $("kpi-range-bytes").textContent = formatBytes(summary.range_bytes);
+        $("kpi-error-rate").textContent = formatPct(summary.error_rate);
+        $("kpi-errors-hint").textContent = "errors " + (summary.range_errors ?? 0);
+        $("kpi-clients").textContent = summary.active_clients ?? 0;
+
+        updateTimeseries(ts.points || []);
+        updateRegistryChart(summary.by_registry || []);
+        renderRepos(repos.items);
+        renderClients(clients.items);
+        renderEventList($("errors"), errors.items);
+        renderEventList($("events"), events.items);
+      } catch (e) {
+        $("load-error").hidden = false;
+        $("load-error").textContent = "加载失败: " + e.message;
+      }
+    }
+
+    function initTokenFromURL() {
+      const u = new URL(location.href);
+      const t = u.searchParams.get("token");
+      if (t) {
+        sessionStorage.setItem(TOKEN_KEY, t);
+        $("token").value = t;
+        u.searchParams.delete("token");
+        history.replaceState({}, "", u.pathname + u.search + u.hash);
+      } else {
+        $("token").value = sessionStorage.getItem(TOKEN_KEY) || "";
+      }
+    }
+
+    document.addEventListener("DOMContentLoaded", () => {
+      initTokenFromURL();
+      $("btn-save").addEventListener("click", () => { saveToken(); refresh(); });
+      $("btn-refresh").addEventListener("click", () => { saveToken(); refresh(); });
+      $("range").addEventListener("change", () => refresh());
+      // Wait a tick for Chart.js defer
+      const boot = () => refresh();
+      if (typeof Chart !== "undefined") boot();
+      else window.addEventListener("load", boot);
+    });
+  </script>
+</body>
+</html>
