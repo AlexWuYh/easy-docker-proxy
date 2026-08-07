@@ -3,7 +3,9 @@
 package proxy
 
 import (
+	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"io"
 	"log"
 	"net"
@@ -25,6 +27,12 @@ import (
 // Emitter receives pull metadata without blocking (M2). nil is a no-op.
 type Emitter interface {
 	Emit(record.Event)
+}
+
+// PullAuthenticator verifies docker-login credentials for the data plane.
+// Independent of web console users.
+type PullAuthenticator interface {
+	AuthenticatePull(ctx context.Context, username, password string) (string, error)
 }
 
 // Path patterns for Docker Registry HTTP API V2.
@@ -54,6 +62,8 @@ type Proxy struct {
 	recorder Emitter
 	// metrics is optional Prometheus collector (M4).
 	metrics *metrics.Collector
+	// pullAuth verifies client Basic credentials (optional).
+	pullAuth PullAuthenticator
 }
 
 // New creates a Proxy from cfg.
@@ -77,6 +87,13 @@ func (p *Proxy) SetEmitter(e Emitter) {
 func (p *Proxy) SetMetrics(m *metrics.Collector) {
 	p.mu.Lock()
 	p.metrics = m
+	p.mu.Unlock()
+}
+
+// SetPullAuthenticator attaches pull-user verification for data-plane Basic auth.
+func (p *Proxy) SetPullAuthenticator(a PullAuthenticator) {
+	p.mu.Lock()
+	p.pullAuth = a
 	p.mu.Unlock()
 }
 
@@ -241,6 +258,13 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Client pull auth (independent of web console users).
+	pullUser, ok := p.checkPullAuth(w, r)
+	if !ok {
+		p.observe("", "denied", 0)
+		return
+	}
+
 	// API version check — answer locally so docker client proceeds.
 	if r.URL.Path == "/v2/" || r.URL.Path == "/v2" {
 		w.Header().Set("Docker-Distribution-Api-Version", "registry/2.0")
@@ -265,8 +289,79 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	status, written, errMsg := p.proxyRequest(w, r, reg)
 	p.maybeLog(r, reg, start)
-	p.emitEvent(r, reg, ip, start, status, written, errMsg)
+	p.emitEvent(r, reg, ip, start, status, written, errMsg, pullUser)
 	p.observe(reg.Name, metrics.ClassFromStatus(status), written)
+}
+
+// checkPullAuth enforces pull_auth.mode. Returns (username, true) on allow.
+func (p *Proxy) checkPullAuth(w http.ResponseWriter, r *http.Request) (string, bool) {
+	p.mu.RLock()
+	mode := config.PullAuthOff
+	realm := "easy-docker-proxy"
+	if p.cfg != nil {
+		mode = p.cfg.PullAuth.Mode
+		if p.cfg.PullAuth.Realm != "" {
+			realm = p.cfg.PullAuth.Realm
+		}
+	}
+	authn := p.pullAuth
+	p.mu.RUnlock()
+
+	if mode == "" {
+		mode = config.PullAuthOff
+	}
+	if mode == config.PullAuthOff {
+		return "", true
+	}
+
+	user, pass, hasBasic := parseBasicAuth(r)
+	if !hasBasic {
+		if mode == config.PullAuthRequired {
+			writePullAuthChallenge(w, realm)
+			return "", false
+		}
+		// optional: anonymous OK
+		return "", true
+	}
+
+	// Credentials present: must validate in optional and required modes.
+	if authn == nil {
+		log.Printf("[pull-auth] credentials provided but no authenticator configured")
+		writePullAuthChallenge(w, realm)
+		return "", false
+	}
+	name, err := authn.AuthenticatePull(r.Context(), user, pass)
+	if err != nil {
+		writePullAuthChallenge(w, realm)
+		return "", false
+	}
+	return name, true
+}
+
+func writePullAuthChallenge(w http.ResponseWriter, realm string) {
+	w.Header().Set("Docker-Distribution-Api-Version", "registry/2.0")
+	w.Header().Set("WWW-Authenticate", `Basic realm="`+realm+`"`)
+	http.Error(w, "unauthorized", http.StatusUnauthorized)
+}
+
+func parseBasicAuth(r *http.Request) (user, pass string, ok bool) {
+	h := r.Header.Get("Authorization")
+	if h == "" {
+		return "", "", false
+	}
+	const prefix = "basic "
+	if len(h) < len(prefix) || !strings.EqualFold(h[:len(prefix)], prefix) {
+		return "", "", false
+	}
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(h[len(prefix):]))
+	if err != nil {
+		return "", "", false
+	}
+	parts := strings.SplitN(string(raw), ":", 2)
+	if len(parts) != 2 {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
 }
 
 func (p *Proxy) observe(registry, class string, bytes int64) {
@@ -448,7 +543,7 @@ func (p *Proxy) proxyRequest(w http.ResponseWriter, r *http.Request, reg *config
 
 // emitEvent records manifest/blob metadata asynchronously (never blocks).
 // tags/list and referrers are skipped by default (design §5.2).
-func (p *Proxy) emitEvent(r *http.Request, reg *config.RegistryConfig, ip string, start time.Time, status int, written int64, errMsg string) {
+func (p *Proxy) emitEvent(r *http.Request, reg *config.RegistryConfig, ip string, start time.Time, status int, written int64, errMsg, pullUser string) {
 	et, repo, ref, ok := classifyPath(r.URL.Path)
 	if !ok {
 		return
@@ -484,6 +579,7 @@ func (p *Proxy) emitEvent(r *http.Request, reg *config.RegistryConfig, ip string
 		Bytes:      written,
 		DurationMS: time.Since(start).Milliseconds(),
 		UserAgent:  ua,
+		PullUser:   pullUser,
 		Error:      errMsg,
 	})
 }

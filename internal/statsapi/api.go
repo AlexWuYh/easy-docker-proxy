@@ -42,6 +42,8 @@ func (a *API) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/auth/me", a.handleMe)
 	mux.HandleFunc("/api/v1/users", a.handleUsers)
 	mux.HandleFunc("/api/v1/users/", a.handleUserByID)
+	mux.HandleFunc("/api/v1/pull-users", a.handlePullUsers)
+	mux.HandleFunc("/api/v1/pull-users/", a.handlePullUserByID)
 	mux.HandleFunc("/api/v1/summary", a.handleSummary)
 	mux.HandleFunc("/api/v1/timeseries", a.handleTimeseries)
 	mux.HandleFunc("/api/v1/top/repos", a.handleTopRepos)
@@ -195,6 +197,107 @@ func (a *API) handleUserByID(w http.ResponseWriter, r *http.Request) {
 				status = http.StatusConflict
 			}
 			writeErr(w, status, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"success": true})
+		return
+	}
+	writeErr(w, http.StatusNotFound, "not found")
+}
+
+func (a *API) handlePullUsers(w http.ResponseWriter, r *http.Request) {
+	u := userFromContext(r)
+	if u == nil || u.Role != store.RoleAdmin {
+		writeErr(w, http.StatusForbidden, "admin only")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		list, err := a.Store.ListPullUsers(r.Context())
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": list})
+	case http.MethodPost:
+		var body struct {
+			Username string `json:"username"`
+			Password string `json:"password"`
+			Enabled  *bool  `json:"enabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid json")
+			return
+		}
+		en := true
+		if body.Enabled != nil {
+			en = *body.Enabled
+		}
+		created, err := a.Store.CreatePullUser(r.Context(), body.Username, body.Password, en)
+		if err != nil {
+			status := http.StatusBadRequest
+			if errors.Is(err, store.ErrPullUserExists) {
+				status = http.StatusConflict
+			}
+			writeErr(w, status, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, created)
+	default:
+		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (a *API) handlePullUserByID(w http.ResponseWriter, r *http.Request) {
+	u := userFromContext(r)
+	if u == nil || u.Role != store.RoleAdmin {
+		writeErr(w, http.StatusForbidden, "admin only")
+		return
+	}
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/pull-users/")
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) == 0 || parts[0] == "" {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	id, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	if len(parts) == 2 && parts[1] == "password" && r.Method == http.MethodPut {
+		var body struct {
+			Password string `json:"password"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid json")
+			return
+		}
+		if err := a.Store.SetPullUserPassword(r.Context(), id, body.Password); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"success": true})
+		return
+	}
+	if len(parts) == 2 && parts[1] == "enabled" && r.Method == http.MethodPut {
+		var body struct {
+			Enabled bool `json:"enabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid json")
+			return
+		}
+		if err := a.Store.SetPullUserEnabled(r.Context(), id, body.Enabled); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"success": true})
+		return
+	}
+	if len(parts) == 1 && r.Method == http.MethodDelete {
+		if err := a.Store.DeletePullUser(r.Context(), id); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"success": true})

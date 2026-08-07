@@ -61,6 +61,36 @@ curl -X POST http://127.0.0.1:5001/api/v1/auth/login \
   -d '{"username":"admin","password":"your-long-password"}'
 ```
 
+### 客户端拉取鉴权（可选）
+
+默认 **`pull_auth.mode: off`**（与现在一样可匿名 pull）。  
+拉取账号与 Web 控制台账号 **相互独立**（表 `pull_users`）。
+
+```yaml
+# configs/config.yaml
+pull_auth:
+  mode: optional   # off | optional | required
+  realm: easy-docker-proxy
+```
+
+```bash
+# 首次可引导创建拉取账号（仅表为空时）
+export PROXY_PULL_USER=puller
+export PROXY_PULL_PASSWORD='your-pull-password'
+
+# 或在 Web「账号」页（管理员）创建拉取账号后：
+docker login hub.example.com -u puller -p 'your-pull-password'
+docker pull hub.example.com/library/nginx:alpine
+```
+
+| mode | 行为 |
+|------|------|
+| `off` | 不要求凭证（默认） |
+| `optional` | 可不登录；若带了 Basic 则必须正确 |
+| `required` | 必须 `docker login` 后才能拉 |
+
+客户端密码 **不会** 转发到上游 Registry。
+
 ### 配置
 
 示例见 [`configs/config.example.yaml`](./configs/config.example.yaml)。  

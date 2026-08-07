@@ -68,6 +68,28 @@ func main() {
 	}
 	_ = st.PurgeExpiredSessions(context.Background())
 
+	// Optional bootstrap for first docker-login (pull) account — independent of web users.
+	pullUser := os.Getenv("PROXY_PULL_USER")
+	if pullUser == "" {
+		pullUser = "puller"
+	}
+	pullPass := os.Getenv("PROXY_PULL_PASSWORD")
+	if created, err := st.BootstrapPullUser(context.Background(), pullUser, pullPass); err != nil {
+		if pullPass != "" {
+			log.Printf("warning: bootstrap pull user: %v", err)
+		}
+	} else if created {
+		log.Printf("created initial pull user %q for docker login (mode=%s)", pullUser, cfg.PullAuth.Mode)
+	}
+	if cfg.PullAuth.Mode != config.PullAuthOff {
+		n, _ := st.CountPullUsers(context.Background())
+		if n == 0 {
+			log.Printf("warning: pull_auth.mode=%s but no pull users — set PROXY_PULL_PASSWORD or create users in console", cfg.PullAuth.Mode)
+		} else {
+			log.Printf("pull auth: mode=%s realm=%q users=%d", cfg.PullAuth.Mode, cfg.PullAuth.Realm, n)
+		}
+	}
+
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	defer bgCancel()
 	st.StartRetentionLoop(bgCtx, time.Hour)
@@ -80,6 +102,7 @@ func main() {
 	p := proxy.New(cfg)
 	p.SetEmitter(queue)
 	p.SetMetrics(mc)
+	p.SetPullAuthenticator(st)
 
 	reload := func() error {
 		next, err := config.Load(*configPath)

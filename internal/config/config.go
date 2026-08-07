@@ -97,6 +97,26 @@ type MetricsConfig struct {
 	Enabled bool `yaml:"enabled" json:"enabled"`
 }
 
+// PullAuthMode controls client authentication on the registry data plane.
+type PullAuthMode string
+
+const (
+	// PullAuthOff: no client credentials required (default, fully open subject to ACL).
+	PullAuthOff PullAuthMode = "off"
+	// PullAuthOptional: anonymous allowed; if Authorization is sent it must be valid.
+	PullAuthOptional PullAuthMode = "optional"
+	// PullAuthRequired: valid Basic credentials required for all registry paths including /v2/.
+	PullAuthRequired PullAuthMode = "required"
+)
+
+// PullAuthConfig is independent of web console users (docker login to the proxy).
+type PullAuthConfig struct {
+	// Mode: off | optional | required. Default off.
+	Mode PullAuthMode `yaml:"mode" json:"mode"`
+	// Realm is sent in WWW-Authenticate challenges (Basic).
+	Realm string `yaml:"realm" json:"realm"`
+}
+
 // UpstreamAllowlist restricts registry upstream hostnames (SSRF hardening).
 // When Enabled, every registries[].upstream host must appear in Hosts (or defaults).
 type UpstreamAllowlist struct {
@@ -122,6 +142,7 @@ type Config struct {
 	Storage            StorageConfig      `yaml:"storage" json:"storage"`
 	Admin              AdminConfig        `yaml:"admin" json:"admin"`
 	Metrics            MetricsConfig      `yaml:"metrics" json:"metrics"`
+	PullAuth           PullAuthConfig     `yaml:"pull_auth" json:"pull_auth"`
 	UpstreamAllowlist  UpstreamAllowlist  `yaml:"upstream_allowlist" json:"upstream_allowlist"`
 	Registries         []RegistryConfig   `yaml:"registries" json:"registries"`
 
@@ -222,6 +243,17 @@ func Normalize(cfg *Config) {
 	}
 	// Metrics default off in Normalize only when zero — example enables explicitly.
 	// Leave Metrics.Enabled as configured (default false).
+	switch cfg.PullAuth.Mode {
+	case "", PullAuthOff, PullAuthOptional, PullAuthRequired:
+		if cfg.PullAuth.Mode == "" {
+			cfg.PullAuth.Mode = PullAuthOff
+		}
+	default:
+		cfg.PullAuth.Mode = PullAuthOff
+	}
+	if cfg.PullAuth.Realm == "" {
+		cfg.PullAuth.Realm = "easy-docker-proxy"
+	}
 	if cfg.UpstreamAllowlist.Enabled == nil {
 		t := true
 		cfg.UpstreamAllowlist.Enabled = &t
@@ -327,6 +359,11 @@ func Validate(cfg *Config) error {
 	case "quiet", "normal", "debug":
 	default:
 		return fmt.Errorf("log_level invalid: %q (quiet|normal|debug)", cfg.LogLevel)
+	}
+	switch cfg.PullAuth.Mode {
+	case PullAuthOff, PullAuthOptional, PullAuthRequired:
+	default:
+		return fmt.Errorf("pull_auth.mode invalid: %q (off|optional|required)", cfg.PullAuth.Mode)
 	}
 	return nil
 }

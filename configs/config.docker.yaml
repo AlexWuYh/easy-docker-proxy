@@ -42,6 +42,11 @@ upstream_allowlist:
 metrics:
   enabled: true
 
+# Client pull auth (docker login to proxy). Default off = anonymous OK.
+pull_auth:
+  mode: off
+  realm: easy-docker-proxy
+
 storage:
   driver: sqlite
   dsn: "file:/data/proxy.db?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"

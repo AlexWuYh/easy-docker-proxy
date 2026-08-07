@@ -29,6 +29,8 @@ type Event struct {
 	DurationMS int64
 	UserAgent  string
 	Error      string
+	// PullUser is the authenticated docker-login username on the proxy (empty if anonymous).
+	PullUser string
 }
 
 // IsPull reports whether this event counts as a successful image pull (manifest 2xx).

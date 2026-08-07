@@ -45,6 +45,14 @@ upstream_allowlist:
 metrics:
   enabled: false
 
+# Client docker-login to THIS proxy (independent of web console accounts).
+# off: anonymous pulls (default) | optional: anonymous OK, bad creds rejected | required: must login
+pull_auth:
+  mode: off
+  realm: easy-docker-proxy
+# Bootstrap first pull user once via env: PROXY_PULL_USER / PROXY_PULL_PASSWORD
+# Then: docker login hub.example.com -u puller -p '...'
+
 storage:
   driver: sqlite
   # Relative paths create parent dirs automatically. Only metadata — never image layers.

@@ -19,6 +19,10 @@ services:
     restart: unless-stopped
     environment:
       PROXY_ADMIN_TOKEN: ${PROXY_ADMIN_TOKEN:?set PROXY_ADMIN_TOKEN in .env}
+      PROXY_WEB_USER: ${PROXY_WEB_USER:-admin}
+      PROXY_WEB_PASSWORD: ${PROXY_WEB_PASSWORD:-}
+      PROXY_PULL_USER: ${PROXY_PULL_USER:-puller}
+      PROXY_PULL_PASSWORD: ${PROXY_PULL_PASSWORD:-}
       DOCKERHUB_USER: ${DOCKERHUB_USER:-}
       DOCKERHUB_TOKEN: ${DOCKERHUB_TOKEN:-}
     volumes:

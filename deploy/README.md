@@ -61,11 +61,23 @@ ports:
 ```
 
 ```bash
-export TOKEN=$(grep PROXY_ADMIN_TOKEN .env | cut -d= -f2)
-open "http://127.0.0.1:5001/stats/?token=$TOKEN"
+# .env 中配置 PROXY_WEB_PASSWORD（及可选 PROXY_WEB_USER）后启动
+open "http://127.0.0.1:5001/stats/login.html"
+# 浏览器登录 Web 控制台；拉取账号在「账号」页单独管理
+
+# API 也可用 PROXY_ADMIN_TOKEN：
+export TOKEN=$(grep PROXY_ADMIN_TOKEN .env | cut -d= -f2-)
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:5001/api/v1/summary?range=7d
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:5001/metrics
 ```
+
+### 拉取鉴权（可选）
+
+默认 `pull_auth.mode: off`（匿名 pull）。若需 `docker login`：
+
+1. 配置 `pull_auth.mode: optional` 或 `required`  
+2. 用 `PROXY_PULL_PASSWORD` 引导首个拉取账号，或在控制台「账号 → Docker 拉取账号」创建  
+3. `docker login <proxy-host> -u puller -p '...'`
 
 ## 安全清单
 

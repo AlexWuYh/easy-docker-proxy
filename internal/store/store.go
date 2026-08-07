@@ -54,10 +54,16 @@ func Open(cfg config.StorageConfig) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("ping sqlite: %w", err)
 	}
+	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("enable foreign_keys: %w", err)
+	}
 	if err := migrate(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
+	// Additive column for DBs created before pull_user existed.
+	_, _ = db.Exec(`ALTER TABLE pull_events ADD COLUMN pull_user TEXT`)
 
 	evDays := cfg.EventRetentionDays
 	if evDays <= 0 {
@@ -110,7 +116,8 @@ CREATE TABLE IF NOT EXISTS pull_events (
   bytes         INTEGER DEFAULT 0,
   duration_ms   INTEGER,
   user_agent    TEXT,
-  error         TEXT
+  error         TEXT,
+  pull_user     TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_events_ts ON pull_events(ts);
 CREATE INDEX IF NOT EXISTS idx_events_repo ON pull_events(repository, ts);
@@ -153,6 +160,15 @@ CREATE TABLE IF NOT EXISTS web_sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON web_sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_exp ON web_sessions(expires_at);
+
+CREATE TABLE IF NOT EXISTS pull_users (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  username      TEXT    NOT NULL UNIQUE,
+  password_hash TEXT    NOT NULL,
+  enabled       INTEGER NOT NULL DEFAULT 1,
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL
+);
 `
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("migrate: %w", err)
@@ -182,8 +198,8 @@ func (s *Store) WriteBatch(ctx context.Context, events []record.Event) error {
 	ins, err := tx.PrepareContext(ctx, `
 INSERT INTO pull_events (
   ts, client_ip, registry, host, event_type, repository, reference,
-  method, status, bytes, duration_ms, user_agent, error
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+  method, status, bytes, duration_ms, user_agent, error, pull_user
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return err
 	}
@@ -232,7 +248,7 @@ ON CONFLICT(day, client_ip) DO UPDATE SET
 
 		if _, err := ins.ExecContext(ctx,
 			tsUnix, ip, e.Registry, e.Host, string(e.EventType), repo, e.Reference,
-			e.Method, e.Status, e.Bytes, e.DurationMS, e.UserAgent, e.Error,
+			e.Method, e.Status, e.Bytes, e.DurationMS, e.UserAgent, e.Error, e.PullUser,
 		); err != nil {
 			return fmt.Errorf("insert event: %w", err)
 		}
