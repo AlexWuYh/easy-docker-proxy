@@ -86,9 +86,11 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:5001/metrics
 | Admin 端口 | 不对 `0.0.0.0` 发布；仅 loopback / VPN / 内网反代 |
 | `PROXY_ADMIN_TOKEN` | 随机 ≥32 字节；勿写入 git |
 | `trusted_proxies` | 仅包含真实边缘（Caddy/Nginx）网段 |
-| `access_control` | 公网建议 `whitelist` |
+| `access_control` | 公网建议 `whitelist`（或开启 `pull_auth.required`） |
+| `default` | 公网建议留空：未知 Host → 404；勿与 `ACL off` 叠加成开放加速器 |
 | `upstream_allowlist` | 默认开启；自定义上游需加入 hosts |
 | `rate_limit` | 默认开启 |
+| `/-/config` / `/-/reload` | 仅 **admin** 会话或 `PROXY_ADMIN_TOKEN`；viewer 无权限 |
 | docker.sock | **禁止**挂载 |
 
 ### trusted_proxies 说明
@@ -112,11 +114,12 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:5001/metrics
 
 ```bash
 docker kill -s HUP $(docker compose -f deploy/docker-compose.yaml ps -q proxy)
-# 或
+# 或（需 admin：PROXY_ADMIN_TOKEN 或 web admin 会话）
 curl -X POST -H "Authorization: Bearer $TOKEN" http://127.0.0.1:5001/-/reload
 ```
 
-注意：SQLite 路径变更需重建/重启容器。
+热重载范围：路由 / ACL / 限流 / 上游与 token 缓存。  
+**不会**重开 SQLite；改 `storage.dsn` 或账号库路径需重启容器。
 
 ## 备份
 

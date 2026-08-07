@@ -11,6 +11,8 @@ server:
   write_timeout: 0
   idle_timeout: 120
 
+# Unknown Host fallback registry name. Empty string = reject unknown Host (404).
+# Keep a named default only when you intentionally want catch-all pull-through.
 default: dockerhub
 log_level: normal # quiet | normal | debug
 
@@ -23,7 +25,7 @@ trusted_proxies:
 
 access_control:
   # off | whitelist | blacklist
-  # Recommend whitelist when exposing to the internet
+  # Public internet: use whitelist (or pull_auth.required) — open ACL + default fallback is abusable.
   mode: off
   whitelist: []
   # - "10.0.0.0/8"

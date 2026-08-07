@@ -250,6 +250,8 @@ func (s *Store) DeleteUser(ctx context.Context, userID int64) error {
 			return ErrLastAdmin
 		}
 	}
+	// Explicit session cleanup (also covered by FK ON DELETE CASCADE when enabled).
+	_, _ = s.db.ExecContext(ctx, `DELETE FROM web_sessions WHERE user_id = ?`, userID)
 	_, err = s.db.ExecContext(ctx, `DELETE FROM web_users WHERE id = ?`, userID)
 	return err
 }

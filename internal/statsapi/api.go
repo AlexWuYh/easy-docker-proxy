@@ -32,6 +32,11 @@ func userFromContext(r *http.Request) *store.User {
 	return u
 }
 
+// UserFromContext returns the authenticated web user, if any.
+func UserFromContext(r *http.Request) *store.User {
+	return userFromContext(r)
+}
+
 // Mount registers routes on mux.
 func (a *API) Mount(mux *http.ServeMux) {
 	if a == nil || a.Store == nil {

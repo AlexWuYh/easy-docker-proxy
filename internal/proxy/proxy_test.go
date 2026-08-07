@@ -73,6 +73,32 @@ func TestResolveRegistryDefault(t *testing.T) {
 	}
 }
 
+func TestResolveRegistryNoDefaultFallback(t *testing.T) {
+	cfg := testConfig()
+	cfg.Default = ""
+	p := New(cfg)
+	req := httptest.NewRequest(http.MethodGet, "http://unknown.example.com/v2/library/nginx/manifests/latest", nil)
+	req.Host = "unknown.example.com"
+	if reg := p.ResolveRegistry(req); reg != nil {
+		t.Fatalf("expected nil without default, got %+v", reg)
+	}
+	// Matched host still works.
+	req2 := httptest.NewRequest(http.MethodGet, "http://hub.example.com/v2/", nil)
+	req2.Host = "hub.example.com"
+	if reg := p.ResolveRegistry(req2); reg == nil || reg.Name != "dockerhub" {
+		t.Fatalf("matched host: %+v", reg)
+	}
+	// ServeHTTP returns 404 for unknown host.
+	req3 := httptest.NewRequest(http.MethodGet, "http://unknown.example.com/v2/library/nginx/manifests/latest", nil)
+	req3.Host = "unknown.example.com"
+	req3.RemoteAddr = "127.0.0.1:1"
+	rr := httptest.NewRecorder()
+	p.ServeHTTP(rr, req3)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("status %d body %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestResolveRegistryXForwardedHostTrusted(t *testing.T) {
 	p := New(testConfig())
 	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/v2/", nil)

@@ -141,3 +141,112 @@ func TestAdminTokenFallback(t *testing.T) {
 		t.Fatalf("status %d %s", rr.Code, rr.Body.String())
 	}
 }
+
+func loginToken(t *testing.T, h http.Handler, user, pass string) string {
+	t.Helper()
+	body := strings.NewReader(`{"username":"` + user + `","password":"` + pass + `"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", body)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("login %d %s", rr.Code, rr.Body.String())
+	}
+	s := rr.Body.String()
+	i := strings.Index(s, `"token":"`)
+	if i < 0 {
+		t.Fatalf("no token: %s", s)
+	}
+	rest := s[i+9:]
+	j := strings.Index(rest, `"`)
+	return rest[:j]
+}
+
+func TestConfigReloadAdminOnly(t *testing.T) {
+	st := testStore(t)
+	if _, err := st.BootstrapAdmin(context.Background(), "admin", "password1"); err != nil {
+		t.Fatal(err)
+	}
+	// viewer account
+	if _, err := st.CreateUser(context.Background(), "viewer1", "password1", store.RoleViewer); err != nil {
+		t.Fatal(err)
+	}
+	reloadCalls := 0
+	h := NewMux(&Handler{
+		Proxy: testProxy(t),
+		Store: st,
+		Stats: &statsapi.API{Store: st},
+		ReloadFunc: func() error {
+			reloadCalls++
+			return nil
+		},
+	})
+
+	viewerTok := loginToken(t, h, "viewer1", "password1")
+	adminTok := loginToken(t, h, "admin", "password1")
+
+	// viewer: stats OK, config/reload forbidden
+	reqS := httptest.NewRequest(http.MethodGet, "/api/v1/summary?range=7d", nil)
+	reqS.Header.Set("Authorization", "Bearer "+viewerTok)
+	rrS := httptest.NewRecorder()
+	h.ServeHTTP(rrS, reqS)
+	if rrS.Code != http.StatusOK {
+		t.Fatalf("viewer summary %d", rrS.Code)
+	}
+
+	reqC := httptest.NewRequest(http.MethodGet, "/-/config", nil)
+	reqC.Header.Set("Authorization", "Bearer "+viewerTok)
+	rrC := httptest.NewRecorder()
+	h.ServeHTTP(rrC, reqC)
+	if rrC.Code != http.StatusForbidden {
+		t.Fatalf("viewer config want 403 got %d %s", rrC.Code, rrC.Body.String())
+	}
+
+	reqR := httptest.NewRequest(http.MethodPost, "/-/reload", nil)
+	reqR.Header.Set("Authorization", "Bearer "+viewerTok)
+	rrR := httptest.NewRecorder()
+	h.ServeHTTP(rrR, reqR)
+	if rrR.Code != http.StatusForbidden {
+		t.Fatalf("viewer reload want 403 got %d", rrR.Code)
+	}
+	if reloadCalls != 0 {
+		t.Fatalf("reload should not run for viewer")
+	}
+
+	// admin: config + reload OK
+	reqCA := httptest.NewRequest(http.MethodGet, "/-/config", nil)
+	reqCA.Header.Set("Authorization", "Bearer "+adminTok)
+	rrCA := httptest.NewRecorder()
+	h.ServeHTTP(rrCA, reqCA)
+	if rrCA.Code != http.StatusOK {
+		t.Fatalf("admin config %d %s", rrCA.Code, rrCA.Body.String())
+	}
+
+	reqRA := httptest.NewRequest(http.MethodPost, "/-/reload", nil)
+	reqRA.Header.Set("Authorization", "Bearer "+adminTok)
+	rrRA := httptest.NewRecorder()
+	h.ServeHTTP(rrRA, reqRA)
+	if rrRA.Code != http.StatusOK {
+		t.Fatalf("admin reload %d %s", rrRA.Code, rrRA.Body.String())
+	}
+	if reloadCalls != 1 {
+		t.Fatalf("reloadCalls=%d", reloadCalls)
+	}
+
+	// ops token still works as admin
+	t.Setenv("PROXY_ADMIN_TOKEN", "ops-static-token")
+	// rebuild mux so AdminToken() sees env (config reads env at request time)
+	h2 := NewMux(&Handler{
+		Proxy: testProxy(t),
+		Store: st,
+		Stats: &statsapi.API{Store: st},
+		ReloadFunc: func() error { return nil },
+	})
+	reqOps := httptest.NewRequest(http.MethodGet, "/-/config", nil)
+	reqOps.Header.Set("Authorization", "Bearer ops-static-token")
+	rrOps := httptest.NewRecorder()
+	h2.ServeHTTP(rrOps, reqOps)
+	if rrOps.Code != http.StatusOK {
+		t.Fatalf("ops token config %d %s", rrOps.Code, rrOps.Body.String())
+	}
+}

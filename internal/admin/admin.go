@@ -135,12 +135,18 @@ func (h *Handler) handleConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	if !requireAdmin(w, r) {
+		return
+	}
 	writeJSON(w, http.StatusOK, config.MaskedCopy(h.Proxy.Config()))
 }
 
 func (h *Handler) handleReload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !requireAdmin(w, r) {
 		return
 	}
 	var err error
@@ -164,6 +170,17 @@ func (h *Handler) handleReload(w http.ResponseWriter, r *http.Request) {
 		n = len(cfg.Registries)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "registries": n})
+}
+
+// requireAdmin allows only RoleAdmin (session admin or PROXY_ADMIN_TOKEN).
+// Viewer sessions may read stats APIs but not config/reload.
+func requireAdmin(w http.ResponseWriter, r *http.Request) bool {
+	u := statsapi.UserFromContext(r)
+	if u == nil || u.Role != store.RoleAdmin {
+		writeJSONError(w, http.StatusForbidden, "admin only")
+		return false
+	}
+	return true
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

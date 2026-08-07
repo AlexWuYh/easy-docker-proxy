@@ -10,7 +10,9 @@ server:
   write_timeout: 0
   idle_timeout: 120
 
-default: dockerhub
+# Empty default: only Hosts listed under registries[] are accepted (no catch-all).
+# Set e.g. default: dockerhub only if you want unknown Host → that upstream.
+default: ""
 log_level: normal
 
 # Caddy/edge on the compose network — trust private ranges for XFF / X-Forwarded-Host.
@@ -21,7 +23,7 @@ trusted_proxies:
   - "192.168.0.0/16"
 
 access_control:
-  # Strongly recommended when the data plane is reachable from the internet:
+  # Public data plane: prefer whitelist (or pull_auth.required). off + open :5000 is abusable.
   # mode: whitelist
   # whitelist:
   #   - "10.0.0.0/8"

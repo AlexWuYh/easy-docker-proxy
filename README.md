@@ -45,7 +45,7 @@ go run ./cmd/proxy -config configs/config.yaml
 # API 版本握手
 curl -H 'Host: hub.example.com' http://127.0.0.1:5000/v2/
 
-# 管理面（需 token）
+# 管理面写操作 / 配置查看（需 PROXY_ADMIN_TOKEN 或 web admin 会话；viewer 不可）
 curl -H "Authorization: Bearer $PROXY_ADMIN_TOKEN" http://127.0.0.1:5001/-/config
 curl -X POST -H "Authorization: Bearer $PROXY_ADMIN_TOKEN" http://127.0.0.1:5001/-/reload
 
@@ -95,6 +95,12 @@ docker pull hub.example.com/library/nginx:alpine
 
 示例见 [`configs/config.example.yaml`](./configs/config.example.yaml)。  
 密钥请用环境变量注入，勿提交真实密码。
+
+公网暴露数据面时建议：
+
+1. `access_control.mode: whitelist`（或 `pull_auth.mode: required`）  
+2. `default: ""`（未知 Host 直接 404，避免成为开放 pull-through）  
+3. 不要把 `admin_listen` / 5001 映射到公网
 
 ### Docker Compose
 

@@ -142,17 +142,10 @@ func buildRoutes(cfg *config.Config) (map[string]*config.RegistryConfig, *config
 		for _, h := range r.Hosts {
 			idx[strings.ToLower(h)] = r
 		}
-		if r.Name == cfg.Default {
+		// Only an explicit default name becomes the unknown-Host fallback.
+		// Empty cfg.Default → no fallback (safer on the public internet).
+		if cfg.Default != "" && r.Name == cfg.Default {
 			def = r
-		}
-	}
-	if def == nil && len(cfg.Registries) > 0 {
-		// First enabled registry.
-		for i := range cfg.Registries {
-			if cfg.Registries[i].IsEnabled() {
-				def = &cfg.Registries[i]
-				break
-			}
 		}
 	}
 	return idx, def
@@ -281,7 +274,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	reg := p.ResolveRegistry(r)
 	if reg == nil {
-		http.Error(w, "no upstream registry configured", http.StatusBadGateway)
+		// Unknown Host with no default fallback, or no registries configured.
+		http.Error(w, "unknown registry host", http.StatusNotFound)
 		p.observe("", "error", 0)
 		return
 	}
