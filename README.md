@@ -14,13 +14,14 @@ cd easy-docker-proxy
 
 cp .env.example .env
 # 必填：PROXY_ADMIN_TOKEN、PROXY_WEB_PASSWORD（≥8 位）
-# 可选：DOCKERHUB_USER / DOCKERHUB_TOKEN（减轻 Hub 限流）
+# 可选上游账号：DOCKERHUB_*、GITHUB_*、QUAY_* 等（见 .env.example）
 
 cp configs/config.docker.yaml configs/config.yaml
 docker compose -f deploy/docker-compose.yaml up -d --build
 ```
 
-默认只映射 **5000**（数据面）。更完整的部署与安全清单见 [deploy/README.md](./deploy/README.md)。
+默认只映射主机 **5000**（数据面，避免占用 80/443）。管理面不映射。  
+已有 Caddy 时：只跑 proxy，在现有 Caddy 里反代到 `127.0.0.1:5000` 即可（[配置说明](./deploy/README.md#4-使用已有-caddy推荐)、[片段示例](./deploy/caddy.external.example)）。
 
 ## 客户端接入
 
@@ -76,37 +77,41 @@ ports:
 
 ## 配置
 
-示例与注释：[configs/config.docker.yaml](./configs/config.docker.yaml)、[configs/config.example.yaml](./configs/config.example.yaml)、[.env.example](./.env.example)。
+完整可编辑模板：
 
-### 上游（代理访问 Hub / GHCR）
+- [configs/config.docker.yaml](./configs/config.docker.yaml) / [configs/config.example.yaml](./configs/config.example.yaml)  
+- 环境变量清单：[.env.example](./.env.example)  
 
-```yaml
-registries:
-  - name: dockerhub
-    hosts: ["registry-1.docker.io", "docker.io"]
-    upstream: "https://registry-1.docker.io"
-    auth:
-      type: token                 # token | anonymous | basic
-      username: "${DOCKERHUB_USER}"
-      password: "${DOCKERHUB_TOKEN}"  # Hub Access Token
-```
+### 内置上游（均已写出 hosts / upstream / auth）
+
+| name | 典型镜像前缀 | 鉴权环境变量（可选） |
+|------|----------------|----------------------|
+| dockerhub | `nginx`、`library/...` | `DOCKERHUB_USER` / `DOCKERHUB_TOKEN` |
+| ghcr | `ghcr.io/...` | `GITHUB_USER` / `GITHUB_TOKEN` |
+| quay | `quay.io/...` | `QUAY_USER` / `QUAY_TOKEN` |
+| gcr | `gcr.io/...` | `GCR_USER` / `GCR_TOKEN` |
+| k8s | `registry.k8s.io/...` | 默认 anonymous |
+| mcr | `mcr.microsoft.com/...` | 默认 anonymous |
+| nvcr | `nvcr.io/...` | `NVCR_USER` / `NVCR_TOKEN`（用户名常为 `$oauthtoken`） |
+| elastic | `docker.elastic.co/...` | `ELASTIC_USER` / `ELASTIC_TOKEN` |
+| ecr-public | `public.ecr.aws/...` | 默认 anonymous |
+
+`auth.type`：`token`（常见）/ `anonymous` / `basic`。变量未设置时按公共匿名处理。
 
 | 你想… | 改什么 |
 |--------|--------|
-| Hub 账号 / 私有库 | `registries[].auth` + 环境变量 |
-| 增加 GHCR 等 | 追加 `registries`，`hosts` 写官方主机名 |
-| 限制谁能拉 | `access_control` 白名单，或下方 `pull_auth` |
-| 网页管理员 | `PROXY_WEB_*` |
-| 运维 API | `PROXY_ADMIN_TOKEN`（Bearer，**不要**用 `?token=`） |
-
-改配置后热重载（不重开数据库）：
+| 上游账号 / 私有库 | 对应 `registries[].auth` + `.env` |
+| 关掉某个上游 | 该项 `enabled: false` |
+| 限制谁能拉 | `access_control` 或 `pull_auth` |
+| 网页 / 运维 | `PROXY_WEB_*` / `PROXY_ADMIN_TOKEN`（仅 Bearer，无 `?token=`） |
 
 ```bash
+# 热重载（不重开数据库）
 curl -X POST -H "Authorization: Bearer $PROXY_ADMIN_TOKEN" \
   http://127.0.0.1:5001/-/reload
 ```
 
-### 可选：要求 docker login 才能经代理拉取
+### 可选：经代理拉取需登录
 
 ```yaml
 pull_auth:
@@ -114,23 +119,28 @@ pull_auth:
 ```
 
 ```bash
-# .env 首次引导（密码 ≥8 位），或网页「账号 → Docker 拉取账号」
 PROXY_PULL_USER=puller
 PROXY_PULL_PASSWORD='your-pull-password'
-
 docker login 10.0.0.8:5000 -u puller -p 'your-pull-password'
 docker pull nginx:alpine
 ```
 
-此账号只给本代理用，与网页登录、上游 Hub 密码都不是同一套。
+与网页账号、上游仓库密码均相互独立。
 
-## 公网注意
+## 端口与公网
 
-1. 不要把 **5001** 映射到公网  
-2. 建议 IP 白名单和/或 `pull_auth.required`  
-3. `trusted_proxies` 只填真实反代网段  
+| 端口 | 用途 |
+|------|------|
+| **5000** | 数据面（默认对外；mirrors / 现有 Caddy 反代目标） |
+| **5001** | 管理 / Stats（默认不映射公网） |
+| 现有 Caddy | 推荐：反代到本机 5000（见 deploy 文档） |
+| **8080 / 8443** | 仅无现成边缘时：`compose --profile edge` |
 
-细节见 [deploy/README.md](./deploy/README.md)。
+1. 不要把 5001 绑到公网  
+2. 建议白名单和/或 `pull_auth.required`  
+3. `trusted_proxies` 只填真实反代  
+
+详见 [deploy/README.md](./deploy/README.md)。
 
 ## 本地开发（Go 1.22+）
 

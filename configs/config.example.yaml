@@ -1,22 +1,20 @@
-# easy-docker-proxy example configuration
-# Copy to config.yaml and adjust hosts / secrets via environment variables.
+# easy-docker-proxy 示例配置
+# 复制为 config.yaml 后按需修改；密钥请用环境变量 ${VAR}，勿写死在文件中。
 
 server:
-  # Registry data plane (public via reverse proxy).
-  # Note: on macOS, :5000 is often taken by AirPlay Receiver — use e.g. ":15000" for local dev.
+  # 数据面（Registry 代理）。默认 5000，避免占用常见 80/443。
+  # macOS 上 :5000 可能被 AirPlay 占用，可改为 ":15000"。
   listen: ":5000"
-  # Admin + Stats API (keep on loopback in production)
+  # 管理面 / Stats（生产建议仅本机）
   admin_listen: "127.0.0.1:5001"
   read_timeout: 60
   write_timeout: 0
   idle_timeout: 120
 
-# Unknown Host fallback registry name. Empty string = reject unknown Host (404).
-# Keep a named default only when you intentionally want catch-all pull-through.
+# 未匹配 hosts 时回落到该 name。mirrors 场景建议 dockerhub；严格模式可 ""。
 default: dockerhub
 log_level: normal # quiet | normal | debug
 
-# Only these proxies may supply X-Forwarded-For / X-Real-IP
 trusted_proxies:
   - "127.0.0.1/32"
   - "10.0.0.0/8"
@@ -24,11 +22,9 @@ trusted_proxies:
   - "192.168.0.0/16"
 
 access_control:
-  # off | whitelist | blacklist
-  # Public internet: use whitelist (or pull_auth.required) — open ACL + default fallback is abusable.
+  # off | whitelist | blacklist（公网建议 whitelist）
   mode: off
   whitelist: []
-  # - "10.0.0.0/8"
   blacklist: []
 
 rate_limit:
@@ -36,62 +32,60 @@ rate_limit:
   per_ip_rps: 20
   per_ip_burst: 40
 
-# Upstream hostname allowlist (SSRF hardening). Empty hosts → built-in public registries.
 upstream_allowlist:
   enabled: true
-  # hosts:
-  #   - registry-1.docker.io
-  #   - ghcr.io
+  # hosts 为空时使用内置公共 registry 列表
 
-# Prometheus text metrics on admin plane: GET /metrics (requires admin token)
 metrics:
   enabled: false
 
-# Client docker-login to THIS proxy (independent of web console accounts).
-# off: anonymous pulls (default) | optional: anonymous OK, bad creds rejected | required: must login
+# 客户端经代理拉取时的鉴权（与网页账号、上游账号无关）
 pull_auth:
-  mode: off
+  mode: off # off | optional | required
   realm: easy-docker-proxy
-# Bootstrap first pull user once via env: PROXY_PULL_USER / PROXY_PULL_PASSWORD
-# Then: docker login <proxy-or-registry-host> -u puller -p '...'  (image names unchanged)
 
 storage:
   driver: sqlite
-  # Relative paths create parent dirs automatically. Only metadata — never image layers.
   dsn: "file:data/proxy.db?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
   event_retention_days: 30
   aggregate_retention_days: 365
 
 admin:
-  # Prefer env PROXY_ADMIN_TOKEN (required for admin/stats)
   token_env: PROXY_ADMIN_TOKEN
   stats_require_auth: true
 
-# Upstream registries: clients keep ORIGINAL image names (nginx, ghcr.io/...).
-# hosts = HTTP Host values that arrive at the proxy (official registry names and/or
-# registry-mirrors address). Proxy matches Host → upstream.
-#
-# auth.type:
-#   token     — Bearer/OAuth (Docker Hub, GHCR, Quay, …). username/password optional;
-#               set them for private images / higher Hub rate limits (use PAT/token).
-#   anonymous — never send credentials upstream.
-#   basic     — HTTP Basic to upstream (username + password required).
+# ---------------------------------------------------------------------------
+# 上游仓库
+# - 客户端镜像名不改（docker pull nginx / ghcr.io/...）
+# - hosts：请求到达代理时的 HTTP Host（官方主机名；mirrors 时还可写代理 IP:端口）
+# - upstream：代理实际访问的地址
+# - auth.type：
+#     token     — Hub/GHCR/Quay 等（Bearer）。username/password 可空=匿名公共镜像
+#     anonymous — 不向上游发任何凭据
+#     basic     — HTTP Basic（少数私有仓）
+# 鉴权字段留空或环境变量未设置时，按匿名公共拉取处理（token 模式）。
+# ---------------------------------------------------------------------------
 registries:
+
+  # --- Docker Hub ---
+  # 客户端: docker pull nginx:alpine
+  # mirrors 时 daemon.json 指向本代理 :5000，可依赖 default: dockerhub
   - name: dockerhub
     enabled: true
     hosts:
       - "registry-1.docker.io"
+      - "registry.docker.io"
       - "docker.io"
-      # When using registry-mirrors pointing at this proxy, also list that address:
-      # - "10.0.0.8:5000"
-      # - "registry.corp.example"
+      # - "10.0.0.8:5000"   # 仅当 default: "" 且使用 registry-mirrors 时需要
     upstream: "https://registry-1.docker.io"
     auth:
       type: token
       username: "${DOCKERHUB_USER}"
-      password: "${DOCKERHUB_TOKEN}"
+      password: "${DOCKERHUB_TOKEN}" # Access Token，勿用登录密码
     token_cache_ttl: 3600
 
+  # --- GitHub Container Registry ---
+  # 客户端: docker pull ghcr.io/<owner>/<image>:<tag>
   - name: ghcr
     enabled: true
     hosts:
@@ -99,10 +93,12 @@ registries:
     upstream: "https://ghcr.io"
     auth:
       type: token
-      # Private packages:
-      # username: "${GITHUB_USER}"
-      # password: "${GITHUB_TOKEN}"
+      username: "${GITHUB_USER}"  # 任意非空即可，常用 GitHub 用户名
+      password: "${GITHUB_TOKEN}" # PAT，私有包需 read:packages
+    token_cache_ttl: 3600
 
+  # --- Quay.io ---
+  # 客户端: docker pull quay.io/<ns>/<image>:<tag>
   - name: quay
     enabled: true
     hosts:
@@ -110,23 +106,56 @@ registries:
     upstream: "https://quay.io"
     auth:
       type: token
+      username: "${QUAY_USER}"
+      password: "${QUAY_TOKEN}" # 或 robot account token
+    token_cache_ttl: 3600
 
+  # --- Google Container Registry ---
+  # 客户端: docker pull gcr.io/<project>/<image>:<tag>
+  - name: gcr
+    enabled: true
+    hosts:
+      - "gcr.io"
+    upstream: "https://gcr.io"
+    auth:
+      type: token
+      username: "${GCR_USER}"     # 常用 _json_key 或 oauth2accesstoken
+      password: "${GCR_TOKEN}"    # JSON key 内容或 access token
+    token_cache_ttl: 3600
+
+  # --- Kubernetes 官方镜像 ---
+  # 客户端: docker pull registry.k8s.io/...  或  k8s.gcr.io/...
   - name: k8s
     enabled: true
     hosts:
       - "registry.k8s.io"
+      - "k8s.gcr.io"
     upstream: "https://registry.k8s.io"
     auth:
-      type: token
+      type: anonymous # 公共镜像一般无需账号
+      # 若私有镜像，改为 type: token 并填写：
+      # username: "${K8S_REGISTRY_USER}"
+      # password: "${K8S_REGISTRY_TOKEN}"
+    token_cache_ttl: 3600
 
+  # --- Microsoft Container Registry ---
+  # 客户端: docker pull mcr.microsoft.com/...
   - name: mcr
     enabled: true
     hosts:
       - "mcr.microsoft.com"
     upstream: "https://mcr.microsoft.com"
     auth:
-      type: token
+      type: anonymous
+      # 私有 ACR 场景可改为 token/basic：
+      # type: token
+      # username: "${MCR_USER}"
+      # password: "${MCR_TOKEN}"
+    token_cache_ttl: 3600
 
+  # --- NVIDIA NGC ---
+  # 客户端: docker pull nvcr.io/...
+  # docker login nvcr.io 时用户名常为 $oauthtoken，密码为 NGC API Key
   - name: nvcr
     enabled: true
     hosts:
@@ -134,13 +163,47 @@ registries:
     upstream: "https://nvcr.io"
     auth:
       type: token
+      username: "${NVCR_USER}"   # 一般为 $oauthtoken
+      password: "${NVCR_TOKEN}"  # NGC API Key
+    token_cache_ttl: 3600
 
-  # Example: private registry with HTTP Basic upstream auth
+  # --- Elastic ---
+  # 客户端: docker pull docker.elastic.co/...
+  - name: elastic
+    enabled: true
+    hosts:
+      - "docker.elastic.co"
+    upstream: "https://docker.elastic.co"
+    auth:
+      type: token
+      username: "${ELASTIC_USER}"
+      password: "${ELASTIC_TOKEN}"
+    token_cache_ttl: 3600
+
+  # --- AWS Public ECR ---
+  # 客户端: docker pull public.ecr.aws/...
+  - name: ecr-public
+    enabled: true
+    hosts:
+      - "public.ecr.aws"
+    upstream: "https://public.ecr.aws"
+    auth:
+      type: anonymous
+      # 若需登录公共 ECR：
+      # type: token
+      # username: "${ECR_PUBLIC_USER}"
+      # password: "${ECR_PUBLIC_TOKEN}"
+    token_cache_ttl: 3600
+
+  # --- 私有仓库示例（HTTP Basic）---
   # - name: private
-  #   enabled: true
-  #   hosts: ["reg.internal.example.com"]
+  #   enabled: false
+  #   hosts:
+  #     - "reg.internal.example.com"
   #   upstream: "https://reg.internal.example.com"
   #   auth:
   #     type: basic
   #     username: "${REGISTRY_USER}"
   #     password: "${REGISTRY_PASSWORD}"
+  #   token_cache_ttl: 3600
+  #   # insecure_skip_verify: false

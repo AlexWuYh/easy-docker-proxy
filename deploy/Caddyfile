@@ -5,12 +5,13 @@
 #   docker pull ghcr.io/owner/app:tag
 # Traffic reaches the proxy via registry-mirrors and/or internal DNS — see README.
 #
-# This file is NOT required for that path. Use it when you want HTTPS on a
-# corporate hostname that reverse-proxies to proxy:5000 (Host preserved).
+# This file is ONLY for compose profile "edge".
+# If you already run Caddy on the host, use deploy/caddy.external.example instead
+# and do NOT start --profile edge.
 #
-# Start:
+# Start bundled edge:
 #   docker compose -f deploy/docker-compose.yaml --profile edge up -d
-#
+# Host ports default to 8080/8443 (EDGE_HTTP_PORT / EDGE_HTTPS_PORT).
 # trusted_proxies in proxy config must include the compose network CIDRs.
 
 # Example: corporate mirror hostname used as registry-mirrors target

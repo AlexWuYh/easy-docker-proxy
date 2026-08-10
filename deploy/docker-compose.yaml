@@ -1,14 +1,16 @@
 # Production-oriented compose: proxy (+ optional Caddy edge).
 # Usage (from repo root):
-#   cp .env.example .env && edit PROXY_ADMIN_TOKEN
-#   cp configs/config.docker.yaml configs/config.yaml  # or customize
+#   cp .env.example .env && edit PROXY_ADMIN_TOKEN / PROXY_WEB_PASSWORD
+#   cp configs/config.docker.yaml configs/config.yaml
 #   docker compose -f deploy/docker-compose.yaml up -d --build
 #
-# Security defaults:
-#   - Admin/stats NOT published to host (only docker network)
-#   - No docker.sock
-#   - non-root image user
-#   - optional read-only rootfs
+# Ports:
+#   - Data plane published on host :5000 (not 80/443 — often taken by other web/proxy software)
+#   - Admin/stats NOT published by default
+#   - Prefer reverse-proxy with your existing Caddy → host :5000 (see deploy/README.md)
+#   - Optional edge profile only if you have no edge yet (8080/8443, EDGE_* override)
+#
+# Security: no docker.sock; non-root image; read_only rootfs
 
 services:
   proxy:
@@ -25,14 +27,24 @@ services:
       PROXY_PULL_PASSWORD: ${PROXY_PULL_PASSWORD:-}
       DOCKERHUB_USER: ${DOCKERHUB_USER:-}
       DOCKERHUB_TOKEN: ${DOCKERHUB_TOKEN:-}
+      GITHUB_USER: ${GITHUB_USER:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      QUAY_USER: ${QUAY_USER:-}
+      QUAY_TOKEN: ${QUAY_TOKEN:-}
+      GCR_USER: ${GCR_USER:-}
+      GCR_TOKEN: ${GCR_TOKEN:-}
+      NVCR_USER: ${NVCR_USER:-}
+      NVCR_TOKEN: ${NVCR_TOKEN:-}
+      ELASTIC_USER: ${ELASTIC_USER:-}
+      ELASTIC_TOKEN: ${ELASTIC_TOKEN:-}
     volumes:
       - ../configs/config.yaml:/etc/proxy/config.yaml:ro
       - proxy-data:/data
     ports:
-      # Data plane only. Never map 5001 to 0.0.0.0 on a public VPS.
+      # Registry data plane — default 5000
       - "5000:5000"
-    # Optional local-only stats access (uncomment for debugging on the host):
-    # - "127.0.0.1:5001:5001"
+      # Optional local-only stats (uncomment):
+      # - "127.0.0.1:5001:5001"
     security_opt:
       - no-new-privileges:true
     read_only: true
@@ -42,14 +54,14 @@ services:
       - proxy-net
     # Intentionally NO docker.sock mount.
 
-  # Edge TLS + Host routing. Enable when DNS points to this host.
+  # Optional TLS edge (profile: edge). Does NOT bind 80/443 by default.
   caddy:
     profiles: ["edge"]
     image: caddy:2.8-alpine
     restart: unless-stopped
     ports:
-      - "80:80"
-      - "443:443"
+      - "${EDGE_HTTP_PORT:-8080}:80"
+      - "${EDGE_HTTPS_PORT:-8443}:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data

@@ -1,22 +1,21 @@
-# Container-oriented config (paths match deploy/Dockerfile + compose volumes).
-# Copy to configs/config.yaml or mount as /etc/proxy/config.yaml.
+# 容器部署配置（路径对应 Dockerfile / compose 卷）
+# 复制为 configs/config.yaml 或挂载到 /etc/proxy/config.yaml
+# 密钥用环境变量注入（见 .env.example / compose environment）
 
 server:
+  # 数据面默认 5000（勿与主机 80/443 抢端口；客户端 mirrors 也指向 :5000）
   listen: ":5000"
-  # Reachable on the docker network for optional private stats reverse-proxy.
-  # Compose does NOT publish this port publicly by default.
+  # 管理面仅容器网络可达；compose 默认不映射到公网
   admin_listen: "0.0.0.0:5001"
   read_timeout: 60
   write_timeout: 0
   idle_timeout: 120
 
-# For registry-mirrors the Docker daemon often sends Host=<mirror-ip:port>, which
-# may not appear in hosts[] below. default: dockerhub makes Hub mirrors work out
-# of the box. For strict multi-registry DNS (only official Hosts), set default: "".
+# registry-mirrors 时 Host 常为「代理IP:5000」，default 保证仍走 Hub
+# 严格多仓库（仅官方 Host）可改为 ""
 default: dockerhub
 log_level: normal
 
-# Caddy/edge on the compose network — trust private ranges for XFF / X-Forwarded-Host.
 trusted_proxies:
   - "127.0.0.1/32"
   - "10.0.0.0/8"
@@ -24,10 +23,7 @@ trusted_proxies:
   - "192.168.0.0/16"
 
 access_control:
-  # Public data plane: prefer whitelist (or pull_auth.required). off + open :5000 is abusable.
-  # mode: whitelist
-  # whitelist:
-  #   - "10.0.0.0/8"
+  # 公网建议: mode: whitelist
   mode: off
   whitelist: []
   blacklist: []
@@ -37,15 +33,12 @@ rate_limit:
   per_ip_rps: 20
   per_ip_burst: 40
 
-# SSRF protection: upstream hosts must be listed (defaults cover Hub/GHCR/…).
 upstream_allowlist:
   enabled: true
-  # hosts: []  # empty → built-in public registry list
 
 metrics:
   enabled: true
 
-# Client pull auth (docker login to proxy). Default off = anonymous OK.
 pull_auth:
   mode: off
   realm: easy-docker-proxy
@@ -60,20 +53,17 @@ admin:
   token_env: PROXY_ADMIN_TOKEN
   stats_require_auth: true
 
-# hosts = inbound Host values (official registry names and/or registry-mirrors address).
-# Clients keep ORIGINAL image names (docker pull nginx). auth = proxy→upstream. See README.
-#
-# Minimal Hub via registry-mirrors (client daemon.json):
-#   { "registry-mirrors": ["http://<this-host>:5000"], "insecure-registries": ["<this-host>:5000"] }
-# With default: dockerhub above, mirrors work even if Host is the proxy IP.
+# 客户端镜像名不改。auth 为空环境变量时 = 匿名公共拉取。
+# Hub mirrors 最小客户端配置:
+#   { "registry-mirrors": ["http://<主机IP>:5000"], "insecure-registries": ["<主机IP>:5000"] }
 registries:
+
   - name: dockerhub
     enabled: true
     hosts:
       - "registry-1.docker.io"
+      - "registry.docker.io"
       - "docker.io"
-      # Optional explicit mirror Host (if you set default: ""):
-      # - "10.0.0.8:5000"
     upstream: "https://registry-1.docker.io"
     auth:
       type: token
@@ -88,8 +78,9 @@ registries:
     upstream: "https://ghcr.io"
     auth:
       type: token
-      # username: "${GITHUB_USER}"
-      # password: "${GITHUB_TOKEN}"
+      username: "${GITHUB_USER}"
+      password: "${GITHUB_TOKEN}"
+    token_cache_ttl: 3600
 
   - name: quay
     enabled: true
@@ -98,14 +89,30 @@ registries:
     upstream: "https://quay.io"
     auth:
       type: token
+      username: "${QUAY_USER}"
+      password: "${QUAY_TOKEN}"
+    token_cache_ttl: 3600
+
+  - name: gcr
+    enabled: true
+    hosts:
+      - "gcr.io"
+    upstream: "https://gcr.io"
+    auth:
+      type: token
+      username: "${GCR_USER}"
+      password: "${GCR_TOKEN}"
+    token_cache_ttl: 3600
 
   - name: k8s
     enabled: true
     hosts:
       - "registry.k8s.io"
+      - "k8s.gcr.io"
     upstream: "https://registry.k8s.io"
     auth:
-      type: token
+      type: anonymous
+    token_cache_ttl: 3600
 
   - name: mcr
     enabled: true
@@ -113,7 +120,8 @@ registries:
       - "mcr.microsoft.com"
     upstream: "https://mcr.microsoft.com"
     auth:
-      type: token
+      type: anonymous
+    token_cache_ttl: 3600
 
   - name: nvcr
     enabled: true
@@ -122,3 +130,26 @@ registries:
     upstream: "https://nvcr.io"
     auth:
       type: token
+      username: "${NVCR_USER}"
+      password: "${NVCR_TOKEN}"
+    token_cache_ttl: 3600
+
+  - name: elastic
+    enabled: true
+    hosts:
+      - "docker.elastic.co"
+    upstream: "https://docker.elastic.co"
+    auth:
+      type: token
+      username: "${ELASTIC_USER}"
+      password: "${ELASTIC_TOKEN}"
+    token_cache_ttl: 3600
+
+  - name: ecr-public
+    enabled: true
+    hosts:
+      - "public.ecr.aws"
+    upstream: "https://public.ecr.aws"
+    auth:
+      type: anonymous
+    token_cache_ttl: 3600
