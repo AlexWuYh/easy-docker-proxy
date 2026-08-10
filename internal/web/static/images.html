@@ -23,17 +23,22 @@
       <div class="page-head">
         <div>
           <h1>镜像列表</h1>
-          <div class="sub">按镜像名合并 · 点击查看 Tag 明细与分析</div>
+          <div class="sub">按上游 + 镜像名合并 · 支持筛选 · 点击查看 Tag 与分析</div>
         </div>
-        <div class="toolbar">
-          <input class="input" id="q" type="search" placeholder="搜索 registry / 镜像 / tag" style="min-width:14rem" />
-          <button type="button" class="btn btn-primary" id="btn-search">搜索</button>
+        <div class="toolbar" style="flex-wrap:wrap;gap:0.5rem">
+          <label class="sr-only" for="registry">上游</label>
+          <select id="registry" class="input" aria-label="上游筛选" style="min-width:10rem">
+            <option value="">全部上游</option>
+          </select>
+          <input class="input" id="q" type="search" placeholder="搜索镜像 / tag" style="min-width:12rem" />
+          <button type="button" class="btn btn-primary" id="btn-search">筛选</button>
+          <button type="button" class="btn btn-ghost" id="btn-reset">重置</button>
         </div>
       </div>
       <div id="load-error" class="error-banner" hidden></div>
       <section class="glass panel">
         <div class="panel-head">
-          <h2>全部镜像 <span id="total-hint" style="font-weight:400;text-transform:none;letter-spacing:0"></span></h2>
+          <h2>镜像 <span id="total-hint" style="font-weight:400;text-transform:none;letter-spacing:0"></span></h2>
         </div>
         <div class="table-wrap" id="list"></div>
         <div class="toolbar" style="margin-top:1rem;justify-content:flex-end">
@@ -52,21 +57,58 @@
     let offset = 0;
     const limit = 30;
     let total = 0;
+    let registriesLoaded = false;
+
+    function paramsFromURL() {
+      const u = new URL(location.href);
+      const reg = u.searchParams.get("registry") || "";
+      const q = u.searchParams.get("q") || "";
+      if (reg) document.getElementById("registry").value = reg;
+      if (q) document.getElementById("q").value = q;
+      const off = parseInt(u.searchParams.get("offset") || "0", 10);
+      if (!isNaN(off) && off >= 0) offset = off;
+    }
+
+    function syncURL() {
+      const u = new URL(location.href);
+      const reg = document.getElementById("registry").value;
+      const q = document.getElementById("q").value.trim();
+      if (reg) u.searchParams.set("registry", reg); else u.searchParams.delete("registry");
+      if (q) u.searchParams.set("q", q); else u.searchParams.delete("q");
+      if (offset > 0) u.searchParams.set("offset", String(offset)); else u.searchParams.delete("offset");
+      history.replaceState(null, "", u.pathname + u.search + u.hash);
+    }
+
+    function fillRegistries(list, prefer) {
+      const sel = document.getElementById("registry");
+      const cur = prefer || sel.value || "";
+      sel.innerHTML = `<option value="">全部上游</option>` +
+        (list || []).map(r => `<option value="${EDP.esc(r)}">${EDP.esc(r)}</option>`).join("");
+      if (cur && [...sel.options].some(o => o.value === cur)) sel.value = cur;
+      registriesLoaded = true;
+    }
 
     async function load() {
       const err = document.getElementById("load-error");
       err.hidden = true;
       const q = document.getElementById("q").value.trim();
+      const registry = document.getElementById("registry").value;
+      syncURL();
       try {
-        const data = await EDP.api(`/api/v1/images?limit=${limit}&offset=${offset}&q=${encodeURIComponent(q)}`);
+        let url = `/api/v1/images?limit=${limit}&offset=${offset}&q=${encodeURIComponent(q)}`;
+        if (registry) url += `&registry=${encodeURIComponent(registry)}`;
+        const data = await EDP.api(url);
+        if (!registriesLoaded || (data.registries && data.registries.length)) {
+          fillRegistries(data.registries || [], registry);
+        }
         total = data.total || 0;
-        document.getElementById("total-hint").textContent = `· ${total} 个仓库`;
+        const filterHint = registry ? `上游 ${registry}` : "全部上游";
+        document.getElementById("total-hint").textContent = `· ${total} 个仓库 · ${filterHint}`;
         document.getElementById("page-hint").textContent = total
           ? `${offset + 1}–${Math.min(offset + limit, total)} / ${total}`
           : "0";
         const rows = (data.items || []).map(im => {
           const href = `/stats/image.html?registry=${encodeURIComponent(im.registry)}&repository=${encodeURIComponent(im.repository)}`;
-          const analysis = `/stats/index.html`; // detail page has analysis
           return `<tr class="clickable" data-href="${href}">
             <td class="mono">${EDP.esc(im.registry)}</td>
             <td class="mono"><strong>${EDP.esc(im.repository)}</strong></td>
@@ -84,9 +126,9 @@
         }).join("");
         document.getElementById("list").innerHTML = rows
           ? `<table class="data"><thead><tr>
-              <th>Registry</th><th>镜像</th><th>Pulls</th><th>Tags</th><th>流量</th><th>错误</th><th>最近拉取</th><th>最近 Tag</th><th>操作</th>
+              <th>上游</th><th>镜像</th><th>Pulls</th><th>Tags</th><th>流量</th><th>错误</th><th>最近拉取</th><th>最近 Tag</th><th>操作</th>
             </tr></thead><tbody>${rows}</tbody></table>`
-          : '<p class="empty">暂无镜像拉取记录</p>';
+          : '<p class="empty">暂无匹配的镜像记录</p>';
         document.querySelectorAll("tr.clickable[data-href]").forEach(tr => {
           tr.addEventListener("click", (e) => {
             if (e.target.tagName === "A") return;
@@ -99,9 +141,21 @@
       }
     }
 
-    document.getElementById("btn-search").addEventListener("click", () => { offset = 0; load(); });
+    function applyFilter() {
+      offset = 0;
+      load();
+    }
+
+    document.getElementById("btn-search").addEventListener("click", applyFilter);
+    document.getElementById("btn-reset").addEventListener("click", () => {
+      document.getElementById("registry").value = "";
+      document.getElementById("q").value = "";
+      offset = 0;
+      load();
+    });
+    document.getElementById("registry").addEventListener("change", applyFilter);
     document.getElementById("q").addEventListener("keydown", (e) => {
-      if (e.key === "Enter") { offset = 0; load(); }
+      if (e.key === "Enter") applyFilter();
     });
     document.getElementById("btn-prev").addEventListener("click", () => {
       offset = Math.max(0, offset - limit); load();
@@ -109,6 +163,9 @@
     document.getElementById("btn-next").addEventListener("click", () => {
       if (offset + limit < total) { offset += limit; load(); }
     });
+
+    // Deep link from dashboard: ?registry=ghcr&q=nginx
+    paramsFromURL();
     load();
   </script>
 </body>

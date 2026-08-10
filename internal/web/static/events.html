@@ -70,8 +70,8 @@
           : "";
         return `<tr ${href ? `class="clickable" data-href="${href}"` : ""}>
           <td>${EDP.fmtTime(e.ts)}</td>
-          <td class="mono">${EDP.esc(e.registry)}</td>
-          <td class="mono">${EDP.esc(e.repository)}${e.reference ? ":" + EDP.esc(e.reference) : ""}</td>
+          <td class="mono" title="上游 name">${EDP.esc(e.registry)}</td>
+          <td class="mono" title="剥离路径前缀后的 repository">${EDP.esc(e.repository)}${e.reference ? ":" + EDP.esc(e.reference) : ""}</td>
           <td><span class="badge badge-info">${EDP.esc(e.event_type || "—")}</span></td>
           <td><span class="badge ${e.status >= 400 ? "badge-err" : "badge-ok"}">${e.status || "—"}</span></td>
           <td class="mono">${EDP.esc(e.client_ip)}</td>
@@ -100,7 +100,7 @@
           EDP.api("/api/v1/errors?limit=" + encodeURIComponent(limit)),
           EDP.api("/api/v1/events?limit=" + encodeURIComponent(limit)),
         ]);
-        const headers = ["Time", "Reg", "Repo", "Type", "Status", "IP", "Bytes", "Error", ""];
+        const headers = ["Time", "上游", "Repo", "Type", "Status", "IP", "Bytes", "Error", ""];
         document.getElementById("errors").innerHTML = table(headers, evRows(errors.items));
         document.getElementById("events").innerHTML = table(headers, evRows(events.items));
         bindRows();

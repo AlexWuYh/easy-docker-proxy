@@ -1,20 +1,15 @@
-# 在「已有 Caddy」上反代 easy-docker-proxy 的示例片段。
-# 复制到你自己的 Caddyfile（或 import），不要与本仓库 compose edge 重复启动 Caddy。
+# 已有 Caddy：统一入口反代 easy-docker-proxy 数据面
+# 不要同时 compose --profile edge。
 #
-# 前置：
-#   1. 仅启动 proxy（不要 --profile edge）
-#   2. 数据面已监听宿主机 5000（compose 默认 "5000:5000"）
-#   3. config 中 trusted_proxies 包含 Caddy 出口 IP（同机一般为 127.0.0.1/32）
-#
-# 客户端镜像名保持不变，例如:
-#   docker pull nginx:alpine
-#   daemon.json: "registry-mirrors": ["https://registry.example.com"]
+# 1. 只启动 proxy（宿主机 5000）
+# 2. trusted_proxies 含 Caddy 出口（同机 127.0.0.1/32）
+# 3. config 中 hosts 含本域名（如 reg.example.com），default: dockerhub
+# 4. 客户端：
+#    - registry-mirrors: ["https://reg.example.com"]
+#    - docker pull reg.example.com/ghcr.io/owner/app:tag
 
-# ---------- 推荐：HTTPS 镜像源域名 → 数据面 ----------
-# 用于 Docker Hub registry-mirrors（代理 config 建议 default: dockerhub）
-registry.example.com {
+reg.example.com {
 	reverse_proxy 127.0.0.1:5000 {
-		# 保留客户端 Host，便于路由；mirrors 场景 Host 即本域名
 		header_up Host {host}
 		header_up X-Forwarded-Host {host}
 		header_up X-Forwarded-Proto {scheme}
@@ -27,34 +22,7 @@ registry.example.com {
 	}
 }
 
-# ---------- 可选：多仓库 DNS 指到本机时，用同一入口 ----------
-# 若内网将 registry-1.docker.io / ghcr.io 解析到 Caddy 所在机，
-# 可用默认站点或 catch-all（按你的 DNS 规划调整）：
-#
-# :443 {
-# 	tls internal   # 或企业证书
-# 	reverse_proxy 127.0.0.1:5000 {
-# 		header_up Host {host}
-# 		header_up X-Forwarded-Host {host}
-# 		header_up X-Forwarded-Proto {scheme}
-# 		header_up X-Real-IP {remote_host}
-# 		header_up X-Forwarded-For {remote_host}
-# 		transport http {
-# 			read_timeout 0
-# 			write_timeout 0
-# 		}
-# 	}
-# }
-
-# ---------- 可选：Stats 管理面（务必限制来源，且应用层仍要登录）----------
-# 先在 compose 中增加: "127.0.0.1:5001:5001"
-# 再仅内网或 basic_auth 暴露：
-#
+# 可选 Stats（先映射 127.0.0.1:5001，并限制来源）
 # stats.example.com {
-# 	# @internal remote_ip 10.0.0.0/8 192.168.0.0/16
-# 	# handle @internal {
-# 	# 	reverse_proxy 127.0.0.1:5001
-# 	# }
-# 	# respond "forbidden" 403
 # 	reverse_proxy 127.0.0.1:5001
 # }

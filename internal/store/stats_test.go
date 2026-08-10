@@ -55,7 +55,7 @@ func TestSummaryAndTop(t *testing.T) {
 		t.Fatalf("toDay=%s want %s", sum.ToDay, day)
 	}
 
-	ts, err := st.Timeseries(context.Background(), "7d")
+	ts, err := st.Timeseries(context.Background(), "7d", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,9 +63,19 @@ func TestSummaryAndTop(t *testing.T) {
 		t.Fatalf("timeseries len=%d", len(ts))
 	}
 
-	repos, err := st.TopRepos(context.Background(), "7d", 10)
+	repos, err := st.TopRepos(context.Background(), "7d", 10, "")
 	if err != nil || len(repos) < 1 {
 		t.Fatalf("repos=%v err=%v", repos, err)
+	}
+	// Filter by registry
+	if filtered, err := st.TopRepos(context.Background(), "7d", 10, repos[0].Registry); err != nil || len(filtered) < 1 {
+		t.Fatalf("filtered repos=%v err=%v", filtered, err)
+	}
+	if tsReg, err := st.Timeseries(context.Background(), "7d", repos[0].Registry); err != nil || len(tsReg) != 7 {
+		t.Fatalf("ts by registry len=%d err=%v", len(tsReg), err)
+	}
+	if sum.ByRegistry[0].PullShare <= 0 && sum.RangePulls > 0 {
+		t.Fatalf("expected pull_share on by_registry: %+v", sum.ByRegistry[0])
 	}
 	clients, err := st.TopClients(context.Background(), "7d", 10)
 	if err != nil || len(clients) != 2 {

@@ -43,11 +43,18 @@ var (
 	referrersRe = regexp.MustCompile(`^/v2/(.+)/referrers/([^/]+)$`)
 )
 
+// pathRoute maps a repository path prefix (e.g. ghcr.io) to an upstream.
+type pathRoute struct {
+	prefix string
+	reg    *config.RegistryConfig
+}
+
 // Proxy is the registry reverse proxy.
 type Proxy struct {
 	mu         sync.RWMutex
 	cfg        *config.Config
 	hostIndex  map[string]*config.RegistryConfig
+	pathRoutes []pathRoute // longest-prefix first
 	defaultReg *config.RegistryConfig
 	acl        *acl.Matcher
 	limiter    *ratelimit.Limiter
@@ -118,9 +125,10 @@ func (p *Proxy) apply(cfg *config.Config) {
 }
 
 func (p *Proxy) applyLocked(cfg *config.Config) {
-	idx, def := buildRoutes(cfg)
+	idx, paths, def := buildRoutes(cfg)
 	p.cfg = cfg
 	p.hostIndex = idx
+	p.pathRoutes = paths
 	p.defaultReg = def
 	p.acl = acl.Build(&cfg.AccessControl)
 	if p.limiter == nil {
@@ -131,8 +139,9 @@ func (p *Proxy) applyLocked(cfg *config.Config) {
 	p.trusted = parseTrusted(cfg.TrustedProxies)
 }
 
-func buildRoutes(cfg *config.Config) (map[string]*config.RegistryConfig, *config.RegistryConfig) {
+func buildRoutes(cfg *config.Config) (map[string]*config.RegistryConfig, []pathRoute, *config.RegistryConfig) {
 	idx := make(map[string]*config.RegistryConfig)
+	var paths []pathRoute
 	var def *config.RegistryConfig
 	for i := range cfg.Registries {
 		r := &cfg.Registries[i]
@@ -140,15 +149,30 @@ func buildRoutes(cfg *config.Config) (map[string]*config.RegistryConfig, *config
 			continue
 		}
 		for _, h := range r.Hosts {
-			idx[strings.ToLower(h)] = r
+			idx[strings.ToLower(strings.TrimSpace(h))] = r
 		}
-		// Only an explicit default name becomes the unknown-Host fallback.
-		// Empty cfg.Default → no fallback (safer on the public internet).
+		for _, pref := range r.PathPrefixes {
+			pref = strings.ToLower(strings.TrimSpace(pref))
+			pref = strings.Trim(pref, "/")
+			if pref == "" {
+				continue
+			}
+			paths = append(paths, pathRoute{prefix: pref, reg: r})
+		}
+		// Only an explicit default name becomes the no-prefix / unknown-Host fallback.
 		if cfg.Default != "" && r.Name == cfg.Default {
 			def = r
 		}
 	}
-	return idx, def
+	// Longest path prefix first for stable matching.
+	for i := 0; i < len(paths); i++ {
+		for j := i + 1; j < len(paths); j++ {
+			if len(paths[j].prefix) > len(paths[i].prefix) {
+				paths[i], paths[j] = paths[j], paths[i]
+			}
+		}
+	}
+	return idx, paths, def
 }
 
 func parseTrusted(entries []string) []*net.IPNet {
@@ -195,25 +219,54 @@ func (p *Proxy) Config() *config.Config {
 	return p.cfg
 }
 
-// ResolveRegistry picks an upstream by Host / X-Forwarded-Host (when peer is trusted).
-// Exported for tests.
+// routeHit is the result of hybrid routing (path prefix + Host + default).
+type routeHit struct {
+	reg         *config.RegistryConfig
+	stripPrefix string // repository path prefix to strip before upstream (e.g. ghcr.io)
+}
+
+// ResolveRegistry picks an upstream (legacy helper for tests: ignores path rewrite).
+// Prefer resolveRoute for full hybrid behaviour.
 func (p *Proxy) ResolveRegistry(r *http.Request) *config.RegistryConfig {
-	host := requestHost(r)
+	return p.resolveRoute(r).reg
+}
+
+// resolveRoute implements single-domain hybrid routing:
+//  1. path_prefixes on repository (longest match)
+//  2. Host / trusted X-Forwarded-Host
+//  3. default registry
+func (p *Proxy) resolveRoute(r *http.Request) routeHit {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	if reg, ok := p.hostIndex[host]; ok {
-		return reg
-	}
-	// X-Forwarded-Host only when connecting peer is a trusted proxy.
-	if p.isTrustedPeer(r) {
-		if fwd := r.Header.Get("X-Forwarded-Host"); fwd != "" {
-			fh := strings.ToLower(strings.SplitN(fwd, ":", 2)[0])
-			if reg, ok := p.hostIndex[fh]; ok {
-				return reg
+
+	repo := extractRepo(r.URL.Path)
+	if repo != "" {
+		for _, pr := range p.pathRoutes {
+			if repo == pr.prefix || strings.HasPrefix(repo, pr.prefix+"/") {
+				return routeHit{reg: pr.reg, stripPrefix: pr.prefix}
 			}
 		}
 	}
-	return p.defaultReg
+
+	host := requestHost(r)
+	if reg, ok := p.hostIndex[host]; ok {
+		return routeHit{reg: reg}
+	}
+	if p.isTrustedPeerLocked(r) {
+		if fwd := r.Header.Get("X-Forwarded-Host"); fwd != "" {
+			fh := strings.ToLower(strings.SplitN(fwd, ":", 2)[0])
+			if reg, ok := p.hostIndex[fh]; ok {
+				return routeHit{reg: reg}
+			}
+		}
+	}
+	return routeHit{reg: p.defaultReg}
+}
+
+// isTrustedPeerLocked assumes p.mu is held for read (or exclusive).
+func (p *Proxy) isTrustedPeerLocked(r *http.Request) bool {
+	remote := remoteIP(r)
+	return ipInNets(remote, p.trusted)
 }
 
 func requestHost(r *http.Request) string {
@@ -272,19 +325,19 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reg := p.ResolveRegistry(r)
-	if reg == nil {
-		// Unknown Host with no default fallback, or no registries configured.
+	hit := p.resolveRoute(r)
+	if hit.reg == nil {
+		// Unknown Host / path with no default fallback, or no registries configured.
 		http.Error(w, "unknown registry host", http.StatusNotFound)
 		p.observe("", "error", 0)
 		return
 	}
 
 	start := time.Now()
-	status, written, errMsg := p.proxyRequest(w, r, reg)
-	p.maybeLog(r, reg, start)
-	p.emitEvent(r, reg, ip, start, status, written, errMsg, pullUser)
-	p.observe(reg.Name, metrics.ClassFromStatus(status), written)
+	status, written, errMsg := p.proxyRequest(w, r, hit)
+	p.maybeLog(r, hit.reg, start)
+	p.emitEvent(r, hit, ip, start, status, written, errMsg, pullUser)
+	p.observe(hit.reg.Name, metrics.ClassFromStatus(status), written)
 }
 
 // checkPullAuth enforces pull_auth.mode. Returns (username, true) on allow.
@@ -417,10 +470,9 @@ func (p *Proxy) ClientIP(r *http.Request) string {
 }
 
 func (p *Proxy) isTrustedPeer(r *http.Request) bool {
-	remote := remoteIP(r)
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return ipInNets(remote, p.trusted)
+	return p.isTrustedPeerLocked(r)
 }
 
 func remoteIP(r *http.Request) string {
@@ -446,7 +498,8 @@ func ipInNets(ipStr string, nets []*net.IPNet) bool {
 	return false
 }
 
-func (p *Proxy) proxyRequest(w http.ResponseWriter, r *http.Request, reg *config.RegistryConfig) (status int, written int64, errMsg string) {
+func (p *Proxy) proxyRequest(w http.ResponseWriter, r *http.Request, hit routeHit) (status int, written int64, errMsg string) {
+	reg := hit.reg
 	client := p.getClient(reg)
 
 	target, err := url.Parse(reg.Upstream)
@@ -455,10 +508,12 @@ func (p *Proxy) proxyRequest(w http.ResponseWriter, r *http.Request, reg *config
 		http.Error(w, "bad upstream url", http.StatusBadGateway)
 		return http.StatusBadGateway, 0, "bad upstream url"
 	}
-	target.Path = singleJoiningSlash(target.Path, r.URL.Path)
+	// Strip path_prefix (e.g. ghcr.io/) so upstream sees its native repository path.
+	fwdPath := stripRepoPathPrefix(r.URL.Path, hit.stripPrefix)
+	target.Path = singleJoiningSlash(target.Path, fwdPath)
 	target.RawQuery = r.URL.RawQuery
 
-	repo := extractRepo(r.URL.Path)
+	repo := extractRepo(fwdPath)
 	scope := ""
 	if repo != "" {
 		scope = "repository:" + repo + ":pull"
@@ -537,8 +592,10 @@ func (p *Proxy) proxyRequest(w http.ResponseWriter, r *http.Request, reg *config
 
 // emitEvent records manifest/blob metadata asynchronously (never blocks).
 // tags/list and referrers are skipped by default (design §5.2).
-func (p *Proxy) emitEvent(r *http.Request, reg *config.RegistryConfig, ip string, start time.Time, status int, written int64, errMsg, pullUser string) {
-	et, repo, ref, ok := classifyPath(r.URL.Path)
+// Repository uses the stripped upstream path in hybrid path-prefix mode.
+func (p *Proxy) emitEvent(r *http.Request, hit routeHit, ip string, start time.Time, status int, written int64, errMsg, pullUser string) {
+	fwdPath := stripRepoPathPrefix(r.URL.Path, hit.stripPrefix)
+	et, repo, ref, ok := classifyPath(fwdPath)
 	if !ok {
 		return
 	}
@@ -563,7 +620,7 @@ func (p *Proxy) emitEvent(r *http.Request, reg *config.RegistryConfig, ip string
 	rec.Emit(record.Event{
 		TS:         time.Now().UTC(),
 		ClientIP:   ip,
-		Registry:   reg.Name,
+		Registry:   hit.reg.Name,
 		Host:       requestHost(r),
 		EventType:  et,
 		Repository: repo,
@@ -576,6 +633,28 @@ func (p *Proxy) emitEvent(r *http.Request, reg *config.RegistryConfig, ip string
 		PullUser:   pullUser,
 		Error:      errMsg,
 	})
+}
+
+// stripRepoPathPrefix removes a hybrid-mode path prefix from a Registry V2 URL path.
+// Example: /v2/ghcr.io/owner/app/manifests/t + "ghcr.io" → /v2/owner/app/manifests/t
+func stripRepoPathPrefix(path, prefix string) string {
+	if prefix == "" {
+		return path
+	}
+	const head = "/v2/"
+	if !strings.HasPrefix(path, head) {
+		return path
+	}
+	rest := path[len(head):]
+	pre := strings.ToLower(strings.Trim(prefix, "/"))
+	lowerRest := strings.ToLower(rest)
+	if lowerRest == pre {
+		return head[:len(head)-1] // "/v2"
+	}
+	if strings.HasPrefix(lowerRest, pre+"/") {
+		return head + rest[len(pre)+1:]
+	}
+	return path
 }
 
 // classifyPath returns event type, repository, and reference for a V2 path.

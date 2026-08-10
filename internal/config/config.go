@@ -29,14 +29,19 @@ type AuthConfig struct {
 	Password string   `yaml:"password" json:"password"`
 }
 
-// RegistryConfig describes a single upstream registry and Host routing.
+// RegistryConfig describes a single upstream registry and routing.
 type RegistryConfig struct {
-	Name               string     `yaml:"name" json:"name"`
-	Hosts              []string   `yaml:"hosts" json:"hosts"`
-	Upstream           string     `yaml:"upstream" json:"upstream"`
-	Auth               AuthConfig `yaml:"auth" json:"auth"`
-	InsecureSkipVerify bool       `yaml:"insecure_skip_verify" json:"insecure_skip_verify"`
-	TokenCacheTTL      int        `yaml:"token_cache_ttl" json:"token_cache_ttl"`
+	Name string `yaml:"name" json:"name"`
+	// Hosts: optional Host / X-Forwarded-Host match (legacy multi-host mode).
+	Hosts []string `yaml:"hosts" json:"hosts"`
+	// PathPrefixes: repository path prefixes for single-domain hybrid mode, e.g. "ghcr.io", "docker.io".
+	// Client: docker pull reg.example.com/ghcr.io/owner/app:tag → repo "ghcr.io/owner/app".
+	// Longest prefix wins. Stripped before talking to upstream.
+	PathPrefixes []string `yaml:"path_prefixes" json:"path_prefixes"`
+	Upstream     string   `yaml:"upstream" json:"upstream"`
+	Auth         AuthConfig `yaml:"auth" json:"auth"`
+	InsecureSkipVerify bool `yaml:"insecure_skip_verify" json:"insecure_skip_verify"`
+	TokenCacheTTL      int  `yaml:"token_cache_ttl" json:"token_cache_ttl"`
 	// Enabled: nil means enabled (omit field in hand-written configs).
 	Enabled *bool `yaml:"enabled" json:"enabled"`
 }
@@ -302,7 +307,9 @@ func Validate(cfg *Config) error {
 		}
 	}
 	names := make(map[string]bool)
-	for _, r := range cfg.Registries {
+	pathPrefixOwner := make(map[string]string) // prefix -> registry name
+	for i := range cfg.Registries {
+		r := &cfg.Registries[i]
 		if r.Name == "" {
 			return fmt.Errorf("registry missing name")
 		}
@@ -310,8 +317,21 @@ func Validate(cfg *Config) error {
 			return fmt.Errorf("duplicate registry name: %s", r.Name)
 		}
 		names[r.Name] = true
-		if len(r.Hosts) == 0 {
-			return fmt.Errorf("registry %s needs at least one host", r.Name)
+		// Host and/or path_prefixes required (single-domain hybrid uses path_prefixes).
+		if len(r.Hosts) == 0 && len(r.PathPrefixes) == 0 {
+			return fmt.Errorf("registry %s needs hosts and/or path_prefixes", r.Name)
+		}
+		for j, p := range r.PathPrefixes {
+			p = strings.ToLower(strings.TrimSpace(p))
+			p = strings.Trim(p, "/")
+			if p == "" {
+				return fmt.Errorf("registry %s path_prefixes[%d] empty", r.Name, j)
+			}
+			if other, ok := pathPrefixOwner[p]; ok {
+				return fmt.Errorf("path_prefix %q used by both %s and %s", p, other, r.Name)
+			}
+			pathPrefixOwner[p] = r.Name
+			r.PathPrefixes[j] = p
 		}
 		if r.Upstream == "" {
 			return fmt.Errorf("registry %s missing upstream", r.Name)

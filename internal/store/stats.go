@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strconv"
 	"strings"
@@ -24,11 +25,15 @@ type Summary struct {
 	ToDay           string          `json:"to_day"`
 }
 
-// RegistryShare is pulls/bytes share per upstream registry.
+// RegistryShare is pulls/bytes/errors share per upstream registry.
 type RegistryShare struct {
-	Registry   string `json:"registry"`
-	Pulls      int64  `json:"pulls"`
-	BytesTotal int64  `json:"bytes_total"`
+	Registry   string  `json:"registry"`
+	Pulls      int64   `json:"pulls"`
+	BytesTotal int64   `json:"bytes_total"`
+	Errors     int64   `json:"errors"`
+	ErrorRate  float64 `json:"error_rate"`
+	PullShare  float64 `json:"pull_share"`  // fraction of total pulls in range
+	BytesShare float64 `json:"bytes_share"` // fraction of total bytes in range
 }
 
 // DayPoint is one day in a timeseries.
@@ -153,7 +158,7 @@ FROM stats_daily WHERE day >= ? AND day <= ?`, fromDay, toDay).Scan(&pulls, &byt
 
 func (s *Store) registryShare(ctx context.Context, fromDay, toDay string) ([]RegistryShare, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT registry, COALESCE(SUM(pulls),0), COALESCE(SUM(bytes_total),0)
+SELECT registry, COALESCE(SUM(pulls),0), COALESCE(SUM(bytes_total),0), COALESCE(SUM(errors),0)
 FROM stats_daily WHERE day >= ? AND day <= ?
 GROUP BY registry ORDER BY SUM(pulls) DESC, SUM(bytes_total) DESC`, fromDay, toDay)
 	if err != nil {
@@ -161,29 +166,57 @@ GROUP BY registry ORDER BY SUM(pulls) DESC, SUM(bytes_total) DESC`, fromDay, toD
 	}
 	defer rows.Close()
 	var out []RegistryShare
+	var totalPulls, totalBytes int64
 	for rows.Next() {
 		var r RegistryShare
-		if err := rows.Scan(&r.Registry, &r.Pulls, &r.BytesTotal); err != nil {
+		if err := rows.Scan(&r.Registry, &r.Pulls, &r.BytesTotal, &r.Errors); err != nil {
 			return nil, err
 		}
+		denom := r.Pulls + r.Errors
+		if denom > 0 {
+			r.ErrorRate = float64(r.Errors) / float64(denom)
+		}
+		totalPulls += r.Pulls
+		totalBytes += r.BytesTotal
 		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		if totalPulls > 0 {
+			out[i].PullShare = float64(out[i].Pulls) / float64(totalPulls)
+		}
+		if totalBytes > 0 {
+			out[i].BytesShare = float64(out[i].BytesTotal) / float64(totalBytes)
+		}
 	}
 	if out == nil {
 		out = []RegistryShare{}
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // Timeseries returns per-day aggregates for the range.
-func (s *Store) Timeseries(ctx context.Context, rangeStr string) ([]DayPoint, error) {
+// If registry is non-empty, only that upstream is included.
+func (s *Store) Timeseries(ctx context.Context, rangeStr, registry string) ([]DayPoint, error) {
 	fromDay, toDay, days, err := ParseRange(rangeStr)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `
+	registry = strings.TrimSpace(registry)
+	var rows *sql.Rows
+	if registry == "" {
+		rows, err = s.db.QueryContext(ctx, `
 SELECT day, COALESCE(SUM(pulls),0), COALESCE(SUM(bytes_total),0), COALESCE(SUM(errors),0)
 FROM stats_daily WHERE day >= ? AND day <= ?
 GROUP BY day ORDER BY day ASC`, fromDay, toDay)
+	} else {
+		rows, err = s.db.QueryContext(ctx, `
+SELECT day, COALESCE(SUM(pulls),0), COALESCE(SUM(bytes_total),0), COALESCE(SUM(errors),0)
+FROM stats_daily WHERE day >= ? AND day <= ? AND registry = ?
+GROUP BY day ORDER BY day ASC`, fromDay, toDay, registry)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -215,7 +248,8 @@ GROUP BY day ORDER BY day ASC`, fromDay, toDay)
 }
 
 // TopRepos returns hottest repositories in the range.
-func (s *Store) TopRepos(ctx context.Context, rangeStr string, limit int) ([]RepoRank, error) {
+// If registry is non-empty, only that upstream is included.
+func (s *Store) TopRepos(ctx context.Context, rangeStr string, limit int, registry string) ([]RepoRank, error) {
 	fromDay, toDay, _, err := ParseRange(rangeStr)
 	if err != nil {
 		return nil, err
@@ -226,12 +260,23 @@ func (s *Store) TopRepos(ctx context.Context, rangeStr string, limit int) ([]Rep
 	if limit > 100 {
 		limit = 100
 	}
-	rows, err := s.db.QueryContext(ctx, `
+	registry = strings.TrimSpace(registry)
+	var rows *sql.Rows
+	if registry == "" {
+		rows, err = s.db.QueryContext(ctx, `
 SELECT registry, repository, COALESCE(SUM(pulls),0), COALESCE(SUM(bytes_total),0), COALESCE(SUM(errors),0)
 FROM stats_daily WHERE day >= ? AND day <= ?
 GROUP BY registry, repository
 ORDER BY SUM(pulls) DESC, SUM(bytes_total) DESC
 LIMIT ?`, fromDay, toDay, limit)
+	} else {
+		rows, err = s.db.QueryContext(ctx, `
+SELECT registry, repository, COALESCE(SUM(pulls),0), COALESCE(SUM(bytes_total),0), COALESCE(SUM(errors),0)
+FROM stats_daily WHERE day >= ? AND day <= ? AND registry = ?
+GROUP BY registry, repository
+ORDER BY SUM(pulls) DESC, SUM(bytes_total) DESC
+LIMIT ?`, fromDay, toDay, registry, limit)
+	}
 	if err != nil {
 		return nil, err
 	}

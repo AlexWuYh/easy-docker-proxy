@@ -1,19 +1,21 @@
 # 部署指南 — easy-docker-proxy
 
+> **首次安装与逐项配置**请先读 **[docs/install.md](../docs/install.md)**。  
+> 本文侧重架构、安全清单与运维（重载 / 备份）。
+
 ## 架构
 
 ```text
-客户端 / registry-mirrors
-        → 主机 :5000              → proxy 数据面
-        → 已有 Caddy（:443 等）   → reverse_proxy → 127.0.0.1:5000
-可选: compose --profile edge（自带 Caddy，默认 8080/8443）
-管理面 proxy:5001 默认不映射到宿主机
+客户端
+  · mirrors:  docker pull nginx          ──┐
+  · 路径前缀: docker pull reg.a.c/ghcr.io/…┤
+                                           ▼
+              Caddy https://reg.a.c  →  127.0.0.1:5000  proxy
+管理面 :5001 默认不映射；勿 DNS 劫持 ghcr.io（TLS 易失败）
 ```
 
-- **不**挂载 `docker.sock`
-- 镜像层 **不**落盘；仅 SQLite 元数据在 `/data`
-- 进程以非 root（uid 65532）运行
-- TLS 边缘：**优先接现有 Caddy/Nginx**；compose 内 Caddy 仅可选
+- **不**挂载 `docker.sock`；镜像层不落盘  
+- TLS：**优先已有 Caddy** 反代到 **5000**；compose `edge` 仅备选（8080/8443）
 
 ## 快速部署（VPS）
 
@@ -37,67 +39,42 @@ docker compose -f deploy/docker-compose.yaml up -d --build
 curl -H 'Host: registry-1.docker.io' http://127.0.0.1:5000/v2/
 ```
 
-### 3. 客户端：镜像名不改，只改接入
+### 3. 客户端：单域名混合模式
 
 ```bash
-# 与直连上游时相同，不要改写成自定义域名镜像名
+# A. Hub（mirrors → https://reg.a.c）
 docker pull nginx:alpine
-docker pull ghcr.io/owner/image:tag
+
+# B. 其它上游 / 显式 Hub（路径前缀，同一域名）
+docker pull reg.a.c/ghcr.io/owner/app:tag
+docker pull reg.a.c/docker.io/library/nginx:latest
 ```
 
-**Docker Hub（推荐）** — 客户端 `daemon.json`：
+**不要**把 `ghcr.io` 等写进 `/etc/hosts` 指到代理（证书对不上）。
+
+mirrors 示例：
 
 ```json
-{
-  "registry-mirrors": ["http://<代理IP>:5000"],
-  "insecure-registries": ["<代理IP>:5000"]
-}
+{ "registry-mirrors": ["https://reg.a.c"] }
 ```
 
-`config.docker.yaml` 默认 `default: dockerhub`，mirrors 指向本机数据面即可，无需改 hosts。  
-若将 `default` 设为 `""`，则须把 mirrors 使用的 `IP:端口` 或域名写入 `registries[].hosts`。
-
-**多仓库** — 内网 DNS 将 `registry-1.docker.io`、`ghcr.io` 等指到代理，且 `registries[].hosts` 填写这些官方主机名。
-
-上游凭据：`registries[].auth`。可选客户端 `pull_auth`。详见根目录 [README.md](../README.md)。
+上游凭据：`registries[].auth`。详见 [README.md](../README.md)。
 
 ### 4. 使用已有 Caddy（推荐）
 
-不必使用本仓库的 `edge` profile。只跑 proxy，由**机器上已有的 Caddy** 做 HTTPS / 域名反代即可。
-
-#### 4.1 只启动代理
+统一域名 → 数据面 **5000** 即可；**不要** `compose --profile edge`（除非没有现成 Caddy）。
 
 ```bash
 docker compose -f deploy/docker-compose.yaml up -d --build
-# 确认宿主机 5000 可访问
-curl -sS -o /dev/null -w '%{http_code}\n' -H 'Host: registry-1.docker.io' http://127.0.0.1:5000/v2/
+curl -sS -o /dev/null -w '%{http_code}\n' -H 'Host: reg.a.c' http://127.0.0.1:5000/v2/
 ```
 
-#### 4.2 代理侧 `trusted_proxies`
+`trusted_proxies` 含 Caddy 出口（同机保留 `127.0.0.1/32`）。
 
-Caddy 与 proxy **同机**时，保证配置包含 loopback（示例已有 `127.0.0.1/32`）。  
-Caddy 在**另一台机或 Docker 网桥**时，把 Caddy 的出口网段写进 `trusted_proxies`，否则不要信任 `X-Forwarded-*`。
-
-```yaml
-# configs/config.yaml
-trusted_proxies:
-  - "127.0.0.1/32"
-  - "10.0.0.0/8"      # 按实际调整
-  - "172.16.0.0/12"
-```
-
-改完后热重载或重启 proxy。
-
-#### 4.3 Caddyfile 片段（复制到你现有配置）
-
-完整示例文件：[caddy.external.example](./caddy.external.example)。
-
-**场景 A — HTTPS 镜像域名（给 `registry-mirrors` 用）**
+完整片段：[caddy.external.example](./caddy.external.example)。
 
 ```caddy
-# 客户端: "registry-mirrors": ["https://registry.example.com"]
-# 代理 config 保持 default: dockerhub
-registry.example.com {
+reg.a.c {
 	reverse_proxy 127.0.0.1:5000 {
 		header_up Host {host}
 		header_up X-Forwarded-Host {host}
@@ -112,46 +89,14 @@ registry.example.com {
 }
 ```
 
-客户端 `daemon.json` 示例：
-
-```json
-{
-  "registry-mirrors": ["https://registry.example.com"]
-}
-```
-
-（HTTPS 一般无需 `insecure-registries`。）
-
-**场景 B — proxy 在 Docker 网络、Caddy 在宿主机**
-
-compose 已映射 `5000:5000` 时，上面 `127.0.0.1:5000` 即可。  
-若 Caddy 也在 compose 同一 `proxy-net` 且**不**映射 5000，可写成：
-
-```caddy
-reverse_proxy proxy:5000 { ... }
-```
-
-并保证 Caddy 容器 `depends_on` / 网络可达。
-
-**要点**
-
 | 项 | 说明 |
 |----|------|
-| 上游地址 | `reverse_proxy` 到 **数据面 5000**，不是 5001 |
-| Host | 建议 `header_up Host {host}`，与代理按 Host 路由一致 |
-| 超时 | blob 较大，建议 `read_timeout 0` / `write_timeout 0` |
-| 证书 | 用你现有 Caddy 的自动 HTTPS 或企业证书即可 |
-| 勿重复 | 已有 Caddy 时不要再 `compose --profile edge` |
+| 反代目标 | **5000**（数据面），不是 5001 |
+| Host | 保留 `{host}`，与 config `hosts` / 默认路由一致 |
+| 超时 | blob 用 `read_timeout 0` |
+| 证书 | 仅需 `reg.a.c`，无需 ghcr.io 证书 |
 
-#### 4.4 可选：本仓库自带 Caddy（无现成边缘时）
-
-默认映射 **8080/8443**（`EDGE_HTTP_PORT` / `EDGE_HTTPS_PORT`），不占用 80/443：
-
-```bash
-docker compose -f deploy/docker-compose.yaml --profile edge up -d --build
-```
-
-配置见 [Caddyfile](./Caddyfile)。
+可选自带 Caddy：`--profile edge`（默认宿主机 8080/8443）。
 
 ### 5. Stats / Metrics（仅本机或内网）
 

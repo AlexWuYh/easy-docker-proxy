@@ -1,18 +1,15 @@
-# 容器部署配置（路径对应 Dockerfile / compose 卷）
-# 复制为 configs/config.yaml 或挂载到 /etc/proxy/config.yaml
-# 密钥用环境变量注入（见 .env.example / compose environment）
+# 容器部署配置 — 单域名混合接入（M6）
+# 复制为 configs/config.yaml；Caddy/域名请改 reg.example.com
+# 密钥见 .env.example
 
 server:
-  # 数据面默认 5000（勿与主机 80/443 抢端口；客户端 mirrors 也指向 :5000）
   listen: ":5000"
-  # 管理面仅容器网络可达；compose 默认不映射到公网
   admin_listen: "0.0.0.0:5001"
   read_timeout: 60
   write_timeout: 0
   idle_timeout: 120
 
-# registry-mirrors 时 Host 常为「代理IP:5000」，default 保证仍走 Hub
-# 严格多仓库（仅官方 Host）可改为 ""
+# mirrors 无前缀 → dockerhub；严格仅 path 匹配可 default: ""
 default: dockerhub
 log_level: normal
 
@@ -23,7 +20,6 @@ trusted_proxies:
   - "192.168.0.0/16"
 
 access_control:
-  # 公网建议: mode: whitelist
   mode: off
   whitelist: []
   blacklist: []
@@ -53,16 +49,16 @@ admin:
   token_env: PROXY_ADMIN_TOKEN
   stats_require_auth: true
 
-# 客户端镜像名不改。auth 为空环境变量时 = 匿名公共拉取。
-# Hub mirrors 最小客户端配置:
-#   { "registry-mirrors": ["http://<主机IP>:5000"], "insecure-registries": ["<主机IP>:5000"] }
+# path_prefixes: docker pull <入口>/ghcr.io/owner/img:tag
+# hosts: 统一入口 Host（与 HTTPS 域名一致）
+# 客户端 mirrors: "registry-mirrors": ["https://reg.example.com"]
 registries:
 
   - name: dockerhub
     enabled: true
     hosts:
-      - "registry-1.docker.io"
-      - "registry.docker.io"
+      - "reg.example.com"
+    path_prefixes:
       - "docker.io"
     upstream: "https://registry-1.docker.io"
     auth:
@@ -73,7 +69,7 @@ registries:
 
   - name: ghcr
     enabled: true
-    hosts:
+    path_prefixes:
       - "ghcr.io"
     upstream: "https://ghcr.io"
     auth:
@@ -84,7 +80,7 @@ registries:
 
   - name: quay
     enabled: true
-    hosts:
+    path_prefixes:
       - "quay.io"
     upstream: "https://quay.io"
     auth:
@@ -95,7 +91,7 @@ registries:
 
   - name: gcr
     enabled: true
-    hosts:
+    path_prefixes:
       - "gcr.io"
     upstream: "https://gcr.io"
     auth:
@@ -106,7 +102,7 @@ registries:
 
   - name: k8s
     enabled: true
-    hosts:
+    path_prefixes:
       - "registry.k8s.io"
       - "k8s.gcr.io"
     upstream: "https://registry.k8s.io"
@@ -116,7 +112,7 @@ registries:
 
   - name: mcr
     enabled: true
-    hosts:
+    path_prefixes:
       - "mcr.microsoft.com"
     upstream: "https://mcr.microsoft.com"
     auth:
@@ -125,7 +121,7 @@ registries:
 
   - name: nvcr
     enabled: true
-    hosts:
+    path_prefixes:
       - "nvcr.io"
     upstream: "https://nvcr.io"
     auth:
@@ -136,7 +132,7 @@ registries:
 
   - name: elastic
     enabled: true
-    hosts:
+    path_prefixes:
       - "docker.elastic.co"
     upstream: "https://docker.elastic.co"
     auth:
@@ -147,7 +143,7 @@ registries:
 
   - name: ecr-public
     enabled: true
-    hosts:
+    path_prefixes:
       - "public.ecr.aws"
     upstream: "https://public.ecr.aws"
     auth:

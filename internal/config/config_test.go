@@ -62,6 +62,56 @@ func TestValidateRejectsHTTPUpstream(t *testing.T) {
 	}
 }
 
+func TestPathPrefixesOnlyValid(t *testing.T) {
+	en := true
+	off := false
+	cfg := &Config{
+		Server:   ServerConfig{Listen: ":5000", AdminListen: "127.0.0.1:5001"},
+		LogLevel: "normal",
+		Default:  "dockerhub",
+		UpstreamAllowlist: UpstreamAllowlist{Enabled: &off},
+		Registries: []RegistryConfig{
+			{
+				Name: "dockerhub", PathPrefixes: []string{"docker.io"},
+				Upstream: "https://registry-1.docker.io",
+				Auth:     AuthConfig{Type: AuthToken}, Enabled: &en,
+			},
+			{
+				Name: "ghcr", PathPrefixes: []string{"ghcr.io"},
+				Upstream: "https://ghcr.io",
+				Auth:     AuthConfig{Type: AuthToken}, Enabled: &en,
+			},
+		},
+	}
+	Normalize(cfg)
+	cfg.UpstreamAllowlist.Enabled = &off
+	if err := Validate(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Registries[0].PathPrefixes[0] != "docker.io" {
+		t.Fatalf("normalize prefix %q", cfg.Registries[0].PathPrefixes[0])
+	}
+}
+
+func TestDuplicatePathPrefixRejected(t *testing.T) {
+	en := true
+	off := false
+	cfg := &Config{
+		Server:   ServerConfig{Listen: ":5000", AdminListen: "127.0.0.1:5001"},
+		LogLevel: "normal",
+		UpstreamAllowlist: UpstreamAllowlist{Enabled: &off},
+		Registries: []RegistryConfig{
+			{Name: "a", PathPrefixes: []string{"ghcr.io"}, Upstream: "https://ghcr.io", Auth: AuthConfig{Type: AuthAnonymous}, Enabled: &en},
+			{Name: "b", PathPrefixes: []string{"ghcr.io"}, Upstream: "https://ghcr.io", Auth: AuthConfig{Type: AuthAnonymous}, Enabled: &en},
+		},
+	}
+	Normalize(cfg)
+	cfg.UpstreamAllowlist.Enabled = &off
+	if err := Validate(cfg); err == nil {
+		t.Fatal("expected duplicate path_prefix error")
+	}
+}
+
 func TestUpstreamAllowlist(t *testing.T) {
 	en := true
 	cfg := &Config{

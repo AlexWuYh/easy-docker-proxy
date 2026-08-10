@@ -6,7 +6,6 @@
   <title>分析看板 · EDP Console</title>
   <link rel="icon" href="/stats/favicon.svg" type="image/svg+xml" />
   <script>
-    // Prevent theme flash before CSS
     (function () {
       var t = localStorage.getItem("edp_theme");
       if (t !== "light" && t !== "dark") {
@@ -25,7 +24,7 @@
       <div class="page-head">
         <div>
           <h1>分析看板</h1>
-          <div class="sub">多维度拉取统计 · 流量 · 错误率 · 客户端（明细事件见「事件」页）</div>
+          <div class="sub">总览与上游仓库维度 · 镜像名/路径前缀剥离后按上游统计</div>
         </div>
         <div class="toolbar">
           <label class="sr-only" for="range">时间范围</label>
@@ -42,56 +41,109 @@
 
       <div class="dim-tabs" role="tablist" aria-label="分析维度">
         <button type="button" class="active" data-dim="overview">总览</button>
-        <button type="button" data-dim="registry">Registry</button>
-        <button type="button" data-dim="repos">热门镜像</button>
-        <button type="button" data-dim="clients">客户端</button>
+        <button type="button" data-dim="upstream">上游仓库</button>
       </div>
 
-      <section class="kpi-grid" id="kpis">
-        <div class="glass kpi"><div class="label">今日 Pulls</div><div class="value" id="k-today-pulls">—</div></div>
-        <div class="glass kpi"><div class="label">今日流量</div><div class="value" id="k-today-bytes">—</div></div>
-        <div class="glass kpi"><div class="label">区间 Pulls</div><div class="value" id="k-range-pulls">—</div><div class="hint" id="k-range-hint"></div></div>
-        <div class="glass kpi"><div class="label">区间流量</div><div class="value" id="k-range-bytes">—</div></div>
-        <div class="glass kpi"><div class="label">错误率</div><div class="value" id="k-err-rate">—</div><div class="hint" id="k-err-hint"></div></div>
-        <div class="glass kpi"><div class="label">活跃客户端</div><div class="value" id="k-clients">—</div></div>
-      </section>
+      <!-- ===== Overview ===== -->
+      <div id="view-overview">
+        <section class="kpi-grid" id="kpis">
+          <div class="glass kpi"><div class="label">今日 Pulls</div><div class="value" id="k-today-pulls">—</div></div>
+          <div class="glass kpi"><div class="label">今日流量</div><div class="value" id="k-today-bytes">—</div></div>
+          <div class="glass kpi"><div class="label">区间 Pulls</div><div class="value" id="k-range-pulls">—</div><div class="hint" id="k-range-hint"></div></div>
+          <div class="glass kpi"><div class="label">区间流量</div><div class="value" id="k-range-bytes">—</div></div>
+          <div class="glass kpi"><div class="label">错误率</div><div class="value" id="k-err-rate">—</div><div class="hint" id="k-err-hint"></div></div>
+          <div class="glass kpi"><div class="label">活跃客户端</div><div class="value" id="k-clients">—</div></div>
+        </section>
 
-      <div class="row">
-        <section class="glass panel">
-          <div class="panel-head"><h2>趋势 · Pulls / 流量</h2></div>
-          <div class="chart-wrap"><canvas id="chart-ts" aria-label="趋势图"></canvas></div>
-        </section>
-        <section class="glass panel">
-          <div class="panel-head"><h2>Registry 占比 (Pulls)</h2></div>
-          <div class="chart-wrap"><canvas id="chart-reg" aria-label="Registry 占比"></canvas></div>
-        </section>
+        <div class="row">
+          <section class="glass panel">
+            <div class="panel-head"><h2>趋势 · Pulls / 流量</h2></div>
+            <div class="chart-wrap"><canvas id="chart-ts" aria-label="趋势图"></canvas></div>
+          </section>
+          <section class="glass panel">
+            <div class="panel-head"><h2>上游占比 (Pulls)</h2></div>
+            <div class="chart-wrap"><canvas id="chart-reg" aria-label="上游占比"></canvas></div>
+          </section>
+        </div>
+
+        <div class="row">
+          <section class="glass panel">
+            <div class="panel-head"><h2>流量 vs 错误（双轴）</h2></div>
+            <div class="chart-wrap"><canvas id="chart-err" aria-label="错误趋势"></canvas></div>
+          </section>
+          <section class="glass panel">
+            <div class="panel-head"><h2>上游流量占比</h2></div>
+            <div class="chart-wrap"><canvas id="chart-reg-bytes" aria-label="上游流量"></canvas></div>
+          </section>
+        </div>
+
+        <div class="row">
+          <section class="glass panel">
+            <div class="panel-head">
+              <h2>热门镜像（全上游）</h2>
+              <a class="btn btn-ghost" href="/stats/images.html" id="link-all-images" style="min-height:36px;font-size:0.8rem">全部镜像 →</a>
+            </div>
+            <div class="table-wrap" id="top-repos"></div>
+          </section>
+          <section class="glass panel">
+            <div class="panel-head">
+              <h2>活跃客户端</h2>
+              <a class="btn btn-ghost" href="/stats/events.html" style="min-height:36px;font-size:0.8rem">查看事件 →</a>
+            </div>
+            <div class="table-wrap" id="top-clients"></div>
+          </section>
+        </div>
       </div>
 
-      <div class="row">
-        <section class="glass panel">
-          <div class="panel-head"><h2>流量 vs 错误（双轴）</h2></div>
-          <div class="chart-wrap"><canvas id="chart-err" aria-label="错误趋势"></canvas></div>
-        </section>
-        <section class="glass panel">
-          <div class="panel-head"><h2>Registry 流量</h2></div>
-          <div class="chart-wrap"><canvas id="chart-reg-bytes" aria-label="Registry 流量"></canvas></div>
-        </section>
-      </div>
-
-      <div class="row">
+      <!-- ===== Upstream dimension ===== -->
+      <div id="view-upstream" hidden>
         <section class="glass panel">
           <div class="panel-head">
-            <h2>热门镜像</h2>
-            <a class="btn btn-ghost" href="/stats/images.html" style="min-height:36px;font-size:0.8rem">全部镜像 →</a>
+            <h2>上游汇总</h2>
+            <span class="hint" style="font-size:0.8rem;opacity:.8">registry 字段 = 配置中的上游 name（如 dockerhub / ghcr）</span>
           </div>
-          <div class="table-wrap" id="top-repos"></div>
+          <div class="table-wrap" id="upstream-table"></div>
         </section>
-        <section class="glass panel">
+
+        <div class="row" style="margin-top:1rem">
+          <section class="glass panel">
+            <div class="panel-head"><h2>上游 Pulls 占比</h2></div>
+            <div class="chart-wrap"><canvas id="chart-up-pulls" aria-label="上游 Pulls"></canvas></div>
+          </section>
+          <section class="glass panel">
+            <div class="panel-head"><h2>上游流量占比</h2></div>
+            <div class="chart-wrap"><canvas id="chart-up-bytes" aria-label="上游流量"></canvas></div>
+          </section>
+        </div>
+
+        <section class="glass panel" style="margin-top:1rem">
           <div class="panel-head">
-            <h2>活跃客户端</h2>
-            <a class="btn btn-ghost" href="/stats/events.html" style="min-height:36px;font-size:0.8rem">查看事件 →</a>
+            <h2>单上游下钻</h2>
+            <div class="toolbar" style="gap:0.5rem">
+              <label class="sr-only" for="upstream-sel">选择上游</label>
+              <select id="upstream-sel" class="input" aria-label="选择上游">
+                <option value="">— 选择上游 —</option>
+              </select>
+            </div>
           </div>
-          <div class="table-wrap" id="top-clients"></div>
+          <div class="kpi-grid" id="up-kpis" style="margin-bottom:1rem">
+            <div class="glass kpi"><div class="label">Pulls</div><div class="value" id="up-k-pulls">—</div></div>
+            <div class="glass kpi"><div class="label">流量</div><div class="value" id="up-k-bytes">—</div></div>
+            <div class="glass kpi"><div class="label">错误</div><div class="value" id="up-k-errors">—</div></div>
+            <div class="glass kpi"><div class="label">错误率</div><div class="value" id="up-k-rate">—</div></div>
+            <div class="glass kpi"><div class="label">Pull 占比</div><div class="value" id="up-k-share">—</div></div>
+            <div class="glass kpi"><div class="label">流量占比</div><div class="value" id="up-k-bshare">—</div></div>
+          </div>
+          <div class="row">
+            <div>
+              <h3 style="font-size:0.9rem;margin:0 0 0.5rem">趋势</h3>
+              <div class="chart-wrap"><canvas id="chart-up-ts" aria-label="单上游趋势"></canvas></div>
+            </div>
+            <div>
+              <h3 style="font-size:0.9rem;margin:0 0 0.5rem">该上游热门镜像</h3>
+              <div class="table-wrap" id="up-repos"></div>
+            </div>
+          </div>
         </section>
       </div>
     </main>
@@ -102,6 +154,9 @@
     EDP.renderNav("dashboard");
 
     let charts = {};
+    let lastPts = [];
+    let lastBy = [];
+    let lastSummary = null;
     const C = () => EDP.chartColors();
 
     function destroyChart(key) {
@@ -113,11 +168,11 @@
       return `<table class="data"><thead><tr>${headers.map(h => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table>`;
     }
 
-    function updateTS(points) {
+    function updateTS(canvasId, key, points) {
       if (typeof Chart === "undefined") return;
       const c = C();
-      destroyChart("ts");
-      charts.ts = new Chart(document.getElementById("chart-ts"), {
+      destroyChart(key);
+      charts[key] = new Chart(document.getElementById(canvasId), {
         type: "line",
         data: {
           labels: points.map(p => p.day.slice(5)),
@@ -181,8 +236,95 @@
       });
     }
 
-    let lastPts = [];
-    let lastBy = [];
+    function renderOverviewRepos(repos) {
+      document.getElementById("top-repos").innerHTML = table(
+        ["上游", "Repository", "Pulls", "Bytes", "Errors", ""],
+        (repos.items || []).map(r => `<tr class="clickable" data-href="/stats/image.html?registry=${encodeURIComponent(r.registry)}&repository=${encodeURIComponent(r.repository)}">
+          <td class="mono">${EDP.esc(r.registry)}</td>
+          <td class="mono">${EDP.esc(r.repository)}</td>
+          <td>${r.pulls}</td><td>${EDP.formatBytes(r.bytes_total)}</td><td>${r.errors}</td>
+          <td><a href="/stats/image.html?registry=${encodeURIComponent(r.registry)}&repository=${encodeURIComponent(r.repository)}">详情</a></td>
+        </tr>`).join("")
+      );
+      document.querySelectorAll("#top-repos tr.clickable[data-href]").forEach(tr => {
+        tr.addEventListener("click", (ev) => {
+          if (ev.target.tagName === "A") return;
+          location.href = tr.getAttribute("data-href");
+        });
+      });
+    }
+
+    function renderUpstreamTable(by) {
+      document.getElementById("upstream-table").innerHTML = table(
+        ["上游", "Pulls", "Pull 占比", "流量", "流量占比", "错误", "错误率"],
+        (by || []).map(r => `<tr class="clickable" data-reg="${EDP.esc(r.registry)}">
+          <td class="mono"><strong>${EDP.esc(r.registry)}</strong></td>
+          <td>${r.pulls}</td>
+          <td>${EDP.formatPct(r.pull_share)}</td>
+          <td>${EDP.formatBytes(r.bytes_total)}</td>
+          <td>${EDP.formatPct(r.bytes_share)}</td>
+          <td>${r.errors || 0}</td>
+          <td>${EDP.formatPct(r.error_rate)}</td>
+        </tr>`).join("") || null
+      );
+      document.querySelectorAll("#upstream-table tr.clickable[data-reg]").forEach(tr => {
+        tr.addEventListener("click", () => {
+          const sel = document.getElementById("upstream-sel");
+          sel.value = tr.getAttribute("data-reg");
+          loadUpstreamDetail();
+        });
+      });
+    }
+
+    function fillUpstreamSelect(by) {
+      const sel = document.getElementById("upstream-sel");
+      const cur = sel.value;
+      sel.innerHTML = `<option value="">— 选择上游 —</option>` +
+        (by || []).map(r => `<option value="${EDP.esc(r.registry)}">${EDP.esc(r.registry)} (${r.pulls})</option>`).join("");
+      if (cur && [...sel.options].some(o => o.value === cur)) sel.value = cur;
+      else if (by && by.length) sel.value = by[0].registry;
+    }
+
+    async function loadUpstreamDetail() {
+      const reg = document.getElementById("upstream-sel").value;
+      const range = document.getElementById("range").value;
+      if (!reg) {
+        document.getElementById("up-k-pulls").textContent = "—";
+        document.getElementById("up-repos").innerHTML = '<p class="empty">请选择上游</p>';
+        destroyChart("upts");
+        return;
+      }
+      const row = (lastBy || []).find(r => r.registry === reg);
+      if (row) {
+        document.getElementById("up-k-pulls").textContent = row.pulls ?? 0;
+        document.getElementById("up-k-bytes").textContent = EDP.formatBytes(row.bytes_total);
+        document.getElementById("up-k-errors").textContent = row.errors ?? 0;
+        document.getElementById("up-k-rate").textContent = EDP.formatPct(row.error_rate);
+        document.getElementById("up-k-share").textContent = EDP.formatPct(row.pull_share);
+        document.getElementById("up-k-bshare").textContent = EDP.formatPct(row.bytes_share);
+      }
+      const q = "range=" + encodeURIComponent(range) + "&registry=" + encodeURIComponent(reg);
+      const [ts, repos] = await Promise.all([
+        EDP.api("/api/v1/timeseries?" + q),
+        EDP.api("/api/v1/top/repos?limit=15&" + q),
+      ]);
+      updateTS("chart-up-ts", "upts", ts.points || []);
+      const more = `/stats/images.html?registry=${encodeURIComponent(reg)}`;
+      document.getElementById("up-repos").innerHTML = table(
+        ["Repository", "Pulls", "Bytes", "Errors", ""],
+        (repos.items || []).map(r => `<tr class="clickable" data-href="/stats/image.html?registry=${encodeURIComponent(r.registry)}&repository=${encodeURIComponent(r.repository)}">
+          <td class="mono">${EDP.esc(r.repository)}</td>
+          <td>${r.pulls}</td><td>${EDP.formatBytes(r.bytes_total)}</td><td>${r.errors}</td>
+          <td><a href="/stats/image.html?registry=${encodeURIComponent(r.registry)}&repository=${encodeURIComponent(r.repository)}">详情</a></td>
+        </tr>`).join("")
+      ) + `<p style="margin-top:0.75rem"><a href="${more}">在镜像列表中查看该上游全部镜像 →</a></p>`;
+      document.querySelectorAll("#up-repos tr.clickable[data-href]").forEach(tr => {
+        tr.addEventListener("click", (ev) => {
+          if (ev.target.tagName === "A") return;
+          location.href = tr.getAttribute("data-href");
+        });
+      });
+    }
 
     async function refresh() {
       const range = document.getElementById("range").value;
@@ -195,6 +337,7 @@
           EDP.api("/api/v1/top/repos?limit=12&range=" + encodeURIComponent(range)),
           EDP.api("/api/v1/top/clients?limit=12&range=" + encodeURIComponent(range)),
         ]);
+        lastSummary = summary;
         document.getElementById("k-today-pulls").textContent = summary.today_pulls ?? 0;
         document.getElementById("k-today-bytes").textContent = EDP.formatBytes(summary.today_bytes);
         document.getElementById("k-range-pulls").textContent = summary.range_pulls ?? 0;
@@ -206,55 +349,60 @@
 
         lastPts = ts.points || [];
         lastBy = summary.by_registry || [];
-        updateTS(lastPts);
+        updateTS("chart-ts", "ts", lastPts);
         updateErr(lastPts);
         doughnut("chart-reg", "reg", lastBy.map(r => r.registry), lastBy.map(r => r.pulls));
         doughnut("chart-reg-bytes", "regb", lastBy.map(r => r.registry), lastBy.map(r => r.bytes_total));
+        doughnut("chart-up-pulls", "upp", lastBy.map(r => r.registry), lastBy.map(r => r.pulls));
+        doughnut("chart-up-bytes", "upb", lastBy.map(r => r.registry), lastBy.map(r => r.bytes_total));
 
-        document.getElementById("top-repos").innerHTML = table(
-          ["Registry", "Repository", "Pulls", "Bytes", "Errors", ""],
-          (repos.items || []).map(r => `<tr class="clickable" data-href="/stats/image.html?registry=${encodeURIComponent(r.registry)}&repository=${encodeURIComponent(r.repository)}">
-            <td class="mono">${EDP.esc(r.registry)}</td>
-            <td class="mono">${EDP.esc(r.repository)}</td>
-            <td>${r.pulls}</td><td>${EDP.formatBytes(r.bytes_total)}</td><td>${r.errors}</td>
-            <td><a href="/stats/image.html?registry=${encodeURIComponent(r.registry)}&repository=${encodeURIComponent(r.repository)}">详情</a></td>
-          </tr>`).join("")
-        );
+        renderOverviewRepos(repos);
         document.getElementById("top-clients").innerHTML = table(
           ["Client IP", "Pulls", "Bytes"],
           (clients.items || []).map(c => `<tr><td class="mono">${EDP.esc(c.client_ip)}</td><td>${c.pulls}</td><td>${EDP.formatBytes(c.bytes_total)}</td></tr>`).join("")
         );
 
-        document.querySelectorAll("tr.clickable[data-href]").forEach(tr => {
-          tr.addEventListener("click", (ev) => {
-            if (ev.target.tagName === "A") return;
-            location.href = tr.getAttribute("data-href");
-          });
-        });
+        renderUpstreamTable(lastBy);
+        fillUpstreamSelect(lastBy);
+        await loadUpstreamDetail();
       } catch (e) {
         errEl.hidden = false;
         errEl.textContent = "加载失败: " + e.message;
       }
     }
 
+    function showDim(dim) {
+      document.getElementById("view-overview").hidden = dim !== "overview";
+      document.getElementById("view-upstream").hidden = dim !== "upstream";
+      document.querySelectorAll(".dim-tabs button").forEach(b => {
+        b.classList.toggle("active", b.dataset.dim === dim);
+      });
+      // Redraw charts when panel becomes visible (Chart.js needs layout)
+      if (dim === "upstream" && lastBy.length) {
+        doughnut("chart-up-pulls", "upp", lastBy.map(r => r.registry), lastBy.map(r => r.pulls));
+        doughnut("chart-up-bytes", "upb", lastBy.map(r => r.registry), lastBy.map(r => r.bytes_total));
+        loadUpstreamDetail();
+      }
+      if (dim === "overview" && lastPts.length) {
+        updateTS("chart-ts", "ts", lastPts);
+        updateErr(lastPts);
+        doughnut("chart-reg", "reg", lastBy.map(r => r.registry), lastBy.map(r => r.pulls));
+        doughnut("chart-reg-bytes", "regb", lastBy.map(r => r.registry), lastBy.map(r => r.bytes_total));
+      }
+    }
+
     document.getElementById("btn-refresh").addEventListener("click", refresh);
     document.getElementById("range").addEventListener("change", refresh);
+    document.getElementById("upstream-sel").addEventListener("change", () => loadUpstreamDetail().catch(e => {
+      document.getElementById("load-error").hidden = false;
+      document.getElementById("load-error").textContent = e.message;
+    }));
     document.querySelectorAll(".dim-tabs button").forEach(btn => {
-      btn.addEventListener("click", () => {
-        document.querySelectorAll(".dim-tabs button").forEach(b => b.classList.remove("active"));
-        btn.classList.add("active");
-        const map = { overview: "kpis", registry: "chart-reg", repos: "top-repos", clients: "top-clients" };
-        const id = map[btn.dataset.dim];
-        const el = id && (document.getElementById(id)?.closest(".panel") || document.getElementById(id));
-        if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-      });
+      btn.addEventListener("click", () => showDim(btn.dataset.dim));
     });
     window.addEventListener("edp-theme-change", () => {
-      if (!lastPts.length) return;
-      updateTS(lastPts);
-      updateErr(lastPts);
-      doughnut("chart-reg", "reg", lastBy.map(r => r.registry), lastBy.map(r => r.pulls));
-      doughnut("chart-reg-bytes", "regb", lastBy.map(r => r.registry), lastBy.map(r => r.bytes_total));
+      const dim = document.querySelector(".dim-tabs button.active")?.dataset.dim || "overview";
+      showDim(dim);
     });
     window.addEventListener("load", refresh);
   </script>

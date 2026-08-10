@@ -31,7 +31,8 @@ type ImageTagStat struct {
 }
 
 // ListImages returns repositories merged by registry+name, ordered by last pull.
-func (s *Store) ListImages(ctx context.Context, q string, limit, offset int) ([]ImageSummary, int64, error) {
+// registry filters to one upstream name (config registries[].name); empty = all.
+func (s *Store) ListImages(ctx context.Context, q, registry string, limit, offset int) ([]ImageSummary, int64, error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -42,9 +43,14 @@ func (s *Store) ListImages(ctx context.Context, q string, limit, offset int) ([]
 		offset = 0
 	}
 	q = strings.TrimSpace(q)
+	registry = strings.TrimSpace(registry)
 
 	where := `WHERE event_type = 'manifest'`
 	args := []any{}
+	if registry != "" {
+		where += ` AND registry = ?`
+		args = append(args, registry)
+	}
 	if q != "" {
 		where += ` AND (repository LIKE ? OR registry LIKE ? OR COALESCE(reference,'') LIKE ?)`
 		like := "%" + q + "%"
@@ -100,6 +106,30 @@ LIMIT ? OFFSET ?`
 		out = []ImageSummary{}
 	}
 	return out, total, rows.Err()
+}
+
+// ListImageRegistries returns distinct upstream names that have image pull data.
+func (s *Store) ListImageRegistries(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT DISTINCT registry FROM pull_events
+WHERE event_type = 'manifest' AND registry IS NOT NULL AND registry != ''
+ORDER BY registry ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var r string
+		if err := rows.Scan(&r); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	if out == nil {
+		out = []string{}
+	}
+	return out, rows.Err()
 }
 
 // ListImageTags returns tag/digest breakdown for one repository.

@@ -331,12 +331,13 @@ func (a *API) handleTimeseries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rangeStr := orDefault(r.URL.Query().Get("range"), "7d")
-	pts, err := a.Store.Timeseries(r.Context(), rangeStr)
+	registry := strings.TrimSpace(r.URL.Query().Get("registry"))
+	pts, err := a.Store.Timeseries(r.Context(), rangeStr, registry)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"range": rangeStr, "points": pts})
+	writeJSON(w, http.StatusOK, map[string]any{"range": rangeStr, "registry": registry, "points": pts})
 }
 
 func (a *API) handleTopRepos(w http.ResponseWriter, r *http.Request) {
@@ -346,12 +347,13 @@ func (a *API) handleTopRepos(w http.ResponseWriter, r *http.Request) {
 	}
 	rangeStr := orDefault(r.URL.Query().Get("range"), "7d")
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	rows, err := a.Store.TopRepos(r.Context(), rangeStr, limit)
+	registry := strings.TrimSpace(r.URL.Query().Get("registry"))
+	rows, err := a.Store.TopRepos(r.Context(), rangeStr, limit, registry)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"range": rangeStr, "items": rows})
+	writeJSON(w, http.StatusOK, map[string]any{"range": rangeStr, "registry": registry, "items": rows})
 }
 
 func (a *API) handleTopClients(w http.ResponseWriter, r *http.Request) {
@@ -404,12 +406,21 @@ func (a *API) handleImages(w http.ResponseWriter, r *http.Request) {
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-	items, total, err := a.Store.ListImages(r.Context(), r.URL.Query().Get("q"), limit, offset)
+	q := r.URL.Query().Get("q")
+	registry := strings.TrimSpace(r.URL.Query().Get("registry"))
+	items, total, err := a.Store.ListImages(r.Context(), q, registry, limit, offset)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": total})
+	regs, _ := a.Store.ListImageRegistries(r.Context())
+	if regs == nil {
+		regs = []string{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items": items, "total": total,
+		"registry": registry, "registries": regs,
+	})
 }
 
 func (a *API) handleImageTags(w http.ResponseWriter, r *http.Request) {
