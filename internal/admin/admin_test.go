@@ -142,6 +142,25 @@ func TestAdminTokenFallback(t *testing.T) {
 	}
 }
 
+func TestQueryTokenRejected(t *testing.T) {
+	t.Setenv("PROXY_ADMIN_TOKEN", "static-token-value")
+	st := testStore(t)
+	h := NewMux(&Handler{Proxy: testProxy(t), Store: st, Stats: &statsapi.API{Store: st}})
+	// ?token= must not authenticate (log/Referer leak surface).
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/summary?range=7d&token=static-token-value", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("query token want 401 got %d", rr.Code)
+	}
+	req2 := httptest.NewRequest(http.MethodGet, "/-/config?token=static-token-value", nil)
+	rr2 := httptest.NewRecorder()
+	h.ServeHTTP(rr2, req2)
+	if rr2.Code != http.StatusUnauthorized {
+		t.Fatalf("query token config want 401 got %d", rr2.Code)
+	}
+}
+
 func loginToken(t *testing.T, h http.Handler, user, pass string) string {
 	t.Helper()
 	body := strings.NewReader(`{"username":"` + user + `","password":"` + pass + `"}`)

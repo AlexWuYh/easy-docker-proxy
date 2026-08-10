@@ -10,9 +10,10 @@ server:
   write_timeout: 0
   idle_timeout: 120
 
-# Empty default: only Hosts listed under registries[] are accepted (no catch-all).
-# Set e.g. default: dockerhub only if you want unknown Host → that upstream.
-default: ""
+# For registry-mirrors the Docker daemon often sends Host=<mirror-ip:port>, which
+# may not appear in hosts[] below. default: dockerhub makes Hub mirrors work out
+# of the box. For strict multi-registry DNS (only official Hosts), set default: "".
+default: dockerhub
 log_level: normal
 
 # Caddy/edge on the compose network — trust private ranges for XFF / X-Forwarded-Host.
@@ -60,14 +61,19 @@ admin:
   stats_require_auth: true
 
 # hosts = inbound Host values (official registry names and/or registry-mirrors address).
-# Clients keep original image names. auth = proxy→upstream. See README.
+# Clients keep ORIGINAL image names (docker pull nginx). auth = proxy→upstream. See README.
+#
+# Minimal Hub via registry-mirrors (client daemon.json):
+#   { "registry-mirrors": ["http://<this-host>:5000"], "insecure-registries": ["<this-host>:5000"] }
+# With default: dockerhub above, mirrors work even if Host is the proxy IP.
 registries:
   - name: dockerhub
     enabled: true
     hosts:
       - "registry-1.docker.io"
       - "docker.io"
-      # - "10.0.0.8:5000"   # if clients use registry-mirrors: ["http://10.0.0.8:5000"]
+      # Optional explicit mirror Host (if you set default: ""):
+      # - "10.0.0.8:5000"
     upstream: "https://registry-1.docker.io"
     auth:
       type: token

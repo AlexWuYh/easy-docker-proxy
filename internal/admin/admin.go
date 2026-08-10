@@ -106,7 +106,8 @@ func bearerOrHeader(r *http.Request) string {
 	if t := r.Header.Get("X-Admin-Token"); t != "" {
 		return t
 	}
-	return r.URL.Query().Get("token")
+	// Intentionally no ?token= query auth (leaks via logs/Referer).
+	return ""
 }
 
 func secureEqual(a, b string) bool {

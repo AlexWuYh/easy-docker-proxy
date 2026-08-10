@@ -1,29 +1,22 @@
-# Optional TLS edge with your own hostnames (not a rewrite of image tags).
-# Preferred client usage keeps original names (nginx, ghcr.io/...) via
-# registry-mirrors or internal DNS to the proxy — see README.
-# This file is for reverse-proxying custom edge names to the data plane.
+# Optional TLS edge in front of the data plane.
 #
-# Start edge profile:
+# Preferred client usage keeps ORIGINAL image names:
+#   docker pull nginx:alpine
+#   docker pull ghcr.io/owner/app:tag
+# Traffic reaches the proxy via registry-mirrors and/or internal DNS — see README.
+#
+# This file is NOT required for that path. Use it when you want HTTPS on a
+# corporate hostname that reverse-proxies to proxy:5000 (Host preserved).
+#
+# Start:
 #   docker compose -f deploy/docker-compose.yaml --profile edge up -d
 #
-# trusted_proxies in proxy config should include the Docker network (10.0.0.0/8 etc).
+# trusted_proxies in proxy config must include the compose network CIDRs.
 
-hub.example.com {
-	reverse_proxy proxy:5000 {
-		header_up Host {host}
-		header_up X-Forwarded-Host {host}
-		header_up X-Forwarded-Proto {scheme}
-		header_up X-Real-IP {remote_host}
-		header_up X-Forwarded-For {remote_host}
-		# Large blob streaming
-		transport http {
-			read_timeout 0
-			write_timeout 0
-		}
-	}
-}
-
-ghcr.example.com {
+# Example: corporate mirror hostname used as registry-mirrors target
+# (clients: "registry-mirrors": ["https://registry.example.com"]).
+# Replace example.com and ensure DNS + hosts[] / default match.
+registry.example.com {
 	reverse_proxy proxy:5000 {
 		header_up Host {host}
 		header_up X-Forwarded-Host {host}
@@ -37,37 +30,24 @@ ghcr.example.com {
 	}
 }
 
-quay.example.com {
-	reverse_proxy proxy:5000 {
-		header_up Host {host}
-		header_up X-Forwarded-Host {host}
-		header_up X-Forwarded-Proto {scheme}
-		header_up X-Real-IP {remote_host}
-		header_up X-Forwarded-For {remote_host}
-		transport http {
-			read_timeout 0
-			write_timeout 0
-		}
-	}
-}
+# Optional: separate edge names only if you also list them under registries[].hosts
+# and point clients/DNS accordingly (still prefer original image tags + mirrors/DNS).
+# hub-edge.example.com {
+# 	reverse_proxy proxy:5000 {
+# 		header_up Host {host}
+# 		header_up X-Forwarded-Host {host}
+# 		header_up X-Forwarded-Proto {scheme}
+# 		header_up X-Real-IP {remote_host}
+# 		header_up X-Forwarded-For {remote_host}
+# 		transport http {
+# 			read_timeout 0
+# 			write_timeout 0
+# 		}
+# 	}
+# }
 
-k8s.example.com {
-	reverse_proxy proxy:5000 {
-		header_up Host {host}
-		header_up X-Forwarded-Host {host}
-		header_up X-Forwarded-Proto {scheme}
-		header_up X-Real-IP {remote_host}
-		header_up X-Forwarded-For {remote_host}
-		transport http {
-			read_timeout 0
-			write_timeout 0
-		}
-	}
-}
-
-# Internal stats — prefer VPN / private DNS; still requires PROXY_ADMIN_TOKEN at the app.
-# Do not expose this hostname on the public internet without additional controls.
+# Internal stats — prefer VPN / private DNS; still requires app login / admin token.
+# Do not expose on the public internet without additional controls.
 # stats.internal.example.com {
 # 	reverse_proxy proxy:5001
-# 	# Optional: basic auth at the edge in addition to app token
 # }

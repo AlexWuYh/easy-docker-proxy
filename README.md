@@ -112,15 +112,16 @@ image: nginx:alpine
 
 镜像名仍是 `nginx:alpine` 等，由 Docker 守护进程把 **Hub 拉取** 转到代理。
 
-1. 代理配置示例（`hosts` 填 mirrors 访问代理时用的地址；也可依赖 `default: dockerhub`）：
+1. 代理配置：`configs/config.docker.yaml` 默认 `default: dockerhub`，**开箱即可**接 `registry-mirrors`（即使 Host 是代理 IP）。示意：
 
 ```yaml
-default: dockerhub
+default: dockerhub   # mirrors 开箱；严格多仓库 DNS 可改为 ""
 registries:
   - name: dockerhub
     hosts:
-      - "10.0.0.8:5000"          # 或你的代理域名
-      - "registry-1.docker.io"   # 若用 DNS 劫持官方名，一并写上
+      - "registry-1.docker.io"
+      - "docker.io"
+      # - "10.0.0.8:5000"   # 若 default 为空则必须写上 mirrors 地址
     upstream: "https://registry-1.docker.io"
     auth:
       type: token

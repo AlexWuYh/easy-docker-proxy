@@ -51,7 +51,8 @@ docker pull ghcr.io/owner/image:tag
 }
 ```
 
-代理 `hosts` 需包含该 mirrors 地址，或设置 `default: dockerhub`。
+`config.docker.yaml` 默认 `default: dockerhub`，mirrors 指向本机数据面即可，无需改 hosts。  
+若将 `default` 设为 `""`，则须把 mirrors 使用的 `IP:端口` 或域名写入 `registries[].hosts`。
 
 **多仓库** — 内网 DNS 将 `registry-1.docker.io`、`ghcr.io` 等指到代理，且 `registries[].hosts` 填写这些官方主机名。
 
