@@ -1,5 +1,7 @@
-# Multi-host registry edge (TLS + reverse proxy).
-# Replace example.com with your domain and ensure DNS A/AAAA records point here.
+# Optional TLS edge with your own hostnames (not a rewrite of image tags).
+# Preferred client usage keeps original names (nginx, ghcr.io/...) via
+# registry-mirrors or internal DNS to the proxy — see README.
+# This file is for reverse-proxying custom edge names to the data plane.
 #
 # Start edge profile:
 #   docker compose -f deploy/docker-compose.yaml --profile edge up -d

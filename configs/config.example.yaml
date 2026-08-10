@@ -53,7 +53,7 @@ pull_auth:
   mode: off
   realm: easy-docker-proxy
 # Bootstrap first pull user once via env: PROXY_PULL_USER / PROXY_PULL_PASSWORD
-# Then: docker login hub.example.com -u puller -p '...'
+# Then: docker login <proxy-or-registry-host> -u puller -p '...'  (image names unchanged)
 
 storage:
   driver: sqlite
@@ -67,15 +67,27 @@ admin:
   token_env: PROXY_ADMIN_TOKEN
   stats_require_auth: true
 
+# Upstream registries: clients keep ORIGINAL image names (nginx, ghcr.io/...).
+# hosts = HTTP Host values that arrive at the proxy (official registry names and/or
+# registry-mirrors address). Proxy matches Host → upstream.
+#
+# auth.type:
+#   token     — Bearer/OAuth (Docker Hub, GHCR, Quay, …). username/password optional;
+#               set them for private images / higher Hub rate limits (use PAT/token).
+#   anonymous — never send credentials upstream.
+#   basic     — HTTP Basic to upstream (username + password required).
 registries:
   - name: dockerhub
     enabled: true
     hosts:
-      - "hub.example.com"
+      - "registry-1.docker.io"
+      - "docker.io"
+      # When using registry-mirrors pointing at this proxy, also list that address:
+      # - "10.0.0.8:5000"
+      # - "registry.corp.example"
     upstream: "https://registry-1.docker.io"
     auth:
       type: token
-      # Optional: reduce Hub rate limits / private pulls
       username: "${DOCKERHUB_USER}"
       password: "${DOCKERHUB_TOKEN}"
     token_cache_ttl: 3600
@@ -83,15 +95,18 @@ registries:
   - name: ghcr
     enabled: true
     hosts:
-      - "ghcr.example.com"
+      - "ghcr.io"
     upstream: "https://ghcr.io"
     auth:
       type: token
+      # Private packages:
+      # username: "${GITHUB_USER}"
+      # password: "${GITHUB_TOKEN}"
 
   - name: quay
     enabled: true
     hosts:
-      - "quay.example.com"
+      - "quay.io"
     upstream: "https://quay.io"
     auth:
       type: token
@@ -99,7 +114,7 @@ registries:
   - name: k8s
     enabled: true
     hosts:
-      - "k8s.example.com"
+      - "registry.k8s.io"
     upstream: "https://registry.k8s.io"
     auth:
       type: token
@@ -107,7 +122,7 @@ registries:
   - name: mcr
     enabled: true
     hosts:
-      - "mcr.example.com"
+      - "mcr.microsoft.com"
     upstream: "https://mcr.microsoft.com"
     auth:
       type: token
@@ -115,7 +130,17 @@ registries:
   - name: nvcr
     enabled: true
     hosts:
-      - "nvcr.example.com"
+      - "nvcr.io"
     upstream: "https://nvcr.io"
     auth:
       type: token
+
+  # Example: private registry with HTTP Basic upstream auth
+  # - name: private
+  #   enabled: true
+  #   hosts: ["reg.internal.example.com"]
+  #   upstream: "https://reg.internal.example.com"
+  #   auth:
+  #     type: basic
+  #     username: "${REGISTRY_USER}"
+  #     password: "${REGISTRY_PASSWORD}"

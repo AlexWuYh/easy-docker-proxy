@@ -1,18 +1,21 @@
 # easy-docker-proxy
 
-用一个代理加速多个 Docker 镜像仓库（Docker Hub、GHCR、Quay 等），**不缓存镜像层**，只记录谁拉了什么，并提供简单的统计网页。
+**Docker 镜像仓库代理**：把 Docker Hub、GHCR、Quay 等请求接到本机代理，按 Host **自动匹配上游**并流式转发。  
+**客户端镜像名保持原样**（与不走代理时相同），不要求改写成其它域名。不缓存镜像层，只记拉取元数据，并提供简单统计网页。
 
-适合：内网 / 机房需要统一加速入口、想看拉取统计、又不想部署带容器管理功能的重型面板。
+适合：内网 / 机房统一加速入口、要看拉取统计、又不想上带容器管理的重型面板。
 
 ## 能做什么
 
 | 能力 | 说明 |
 |------|------|
-| 多仓库加速 | 按访问域名路由到不同上游（如 `hub.example.com` → Docker Hub） |
-| 客户端无感 | 代理在服务端完成上游 Token 换发，一般不用在客户端配上游密码 |
-| 零镜像缓存 | 只做流式转发，磁盘只存拉取元数据（SQLite） |
-| 统计控制台 | 浏览器登录查看拉取量、流量、热门镜像、客户端、错误与事件 |
-| 可选拉取鉴权 | 可要求 `docker login` 才能拉；账号与网页登录账号相互独立 |
+| 仓库代理 | 流量进代理后，按 Host 匹配上游并转发 |
+| 镜像名不改 | `docker pull` / Dockerfile / K8s 仍用原始引用 |
+| 多上游 | 同一代理可服务 Hub、GHCR 等多个源 |
+| 上游鉴权在服务端 | 代理完成 Token 换发；客户端一般不必配上游密码 |
+| 零镜像缓存 | 不落盘镜像层，仅 SQLite 元数据与统计 |
+| 统计控制台 | 拉取量、流量、热门镜像、客户端、错误与事件 |
+| 可选拉取鉴权 | 可要求先 `docker login` 才能经代理拉取 |
 | 安全边界 | **不**挂载 Docker socket，**不**管理容器，管理口默认不暴露公网 |
 
 ## 不能做什么
@@ -24,23 +27,27 @@
 ## 怎么工作
 
 ```text
-  docker pull hub.example.com/library/nginx:alpine
-                 │
-                 ▼
-         ┌───────────────┐
-         │ 数据面 :5000  │  ← 可对客户端 / 边缘 TLS 暴露
-         │ 按 Host 转发  │
-         └───────┬───────┘
-                 ▼
-         registry-1.docker.io 等上游
-
-         ┌───────────────┐
-         │ 管理面 :5001  │  ← 仅本机或内网：Stats / API / metrics
-         └───────────────┘
+  客户端（镜像名完全不变）
+    docker pull nginx:alpine
+    docker pull ghcr.io/owner/app:tag
+           │
+           │  通过 mirrors / 内网 DNS 等
+           │  把请求送到代理（域名或 IP:端口）
+           ▼
+  ┌────────────────────────────┐
+  │  代理数据面                │
+  │  Host → 匹配 registries    │──► 真实上游
+  └────────────────────────────┘
 ```
 
-- **数据面**：Registry V2 只读（GET/HEAD）  
-- **管理面**：统计网页、账号管理、运维 API；生产环境不要映射到公网  
+| 角色 | 职责 |
+|------|------|
+| **客户端** | 继续使用**原始**镜像名；只需把「访问路径」指到代理（见下） |
+| **代理** | 看请求 Host，选 `upstream`，代拉真实仓库 |
+| **上游** | registry-1.docker.io、ghcr.io 等；凭据在 `registries[].auth` |
+
+代理**对外发布**：可用 **域名（推荐）** 或 **IP:端口**。  
+客户端侧要保证：发出去的 Registry 请求实际连到这台代理（而不是直连公网上游）。
 
 ---
 
@@ -58,7 +65,8 @@ cp .env.example .env
 #   PROXY_WEB_PASSWORD=你的网页登录密码   # 至少 8 位，首次启动创建管理员
 
 cp configs/config.docker.yaml configs/config.yaml
-# 编辑 configs/config.yaml：把 hub.example.com 等改成你的域名
+# 确认 registries[].hosts 为客户端会带到请求里的 Host
+# （官方仓库主机名，和/或 mirrors 使用的代理域名 / IP）
 ```
 
 ### 2. 启动
@@ -69,30 +77,139 @@ docker compose -f deploy/docker-compose.yaml up -d --build
 
 默认只发布 **数据面 5000**，**不**发布管理面 5001。
 
-### 3. 让客户端认识域名
+### 3. 客户端怎么用（核心）
 
-任选其一：
+#### 原则
 
-- 内网 DNS：把 `hub.example.com`、`ghcr.example.com` 等指到代理机器  
-- 本机测试：在 `/etc/hosts` 写 `127.0.0.1 hub.example.com`  
-
-（公网生产建议再加 TLS 边缘，见 [deploy/README.md](./deploy/README.md)。）
-
-### 4. 拉取镜像
+> **`docker pull` 的镜像引用保持与直连上游时完全一致，不做任何改写。**  
+> 需要改的是「流量怎么到代理」，不是「镜像名叫什么」。
 
 ```bash
-docker pull hub.example.com/library/nginx:alpine
-docker pull ghcr.example.com/owner/image:tag
+# 以下写法与未部署代理时相同
+docker pull nginx:alpine
+docker pull library/nginx:alpine
+docker pull docker.io/library/nginx:alpine
+docker pull ghcr.io/owner/image:tag
 ```
+
+```dockerfile
+FROM nginx:alpine
+FROM ghcr.io/owner/image:tag
+```
+
+```yaml
+image: nginx:alpine
+```
+
+#### 如何把流量送到代理
+
+代理配置里 `hosts` 写的是：**请求到达代理时 HTTP Host 会是什么**（用来匹配上游）。  
+常见两种接入方式：
+
+---
+
+**方式 A — Docker Hub：`registry-mirrors`（最常见）**
+
+镜像名仍是 `nginx:alpine` 等，由 Docker 守护进程把 **Hub 拉取** 转到代理。
+
+1. 代理配置示例（`hosts` 填 mirrors 访问代理时用的地址；也可依赖 `default: dockerhub`）：
+
+```yaml
+default: dockerhub
+registries:
+  - name: dockerhub
+    hosts:
+      - "10.0.0.8:5000"          # 或你的代理域名
+      - "registry-1.docker.io"   # 若用 DNS 劫持官方名，一并写上
+    upstream: "https://registry-1.docker.io"
+    auth:
+      type: token
+      username: "${DOCKERHUB_USER}"
+      password: "${DOCKERHUB_TOKEN}"
+```
+
+2. 客户端 `/etc/docker/daemon.json`（Linux）：
+
+```json
+{
+  "registry-mirrors": ["http://10.0.0.8:5000"],
+  "insecure-registries": ["10.0.0.8:5000"]
+}
+```
+
+HTTPS 代理则写 `https://registry.corp.com`，并去掉对应 insecure 项。  
+然后 `systemctl restart docker`。
+
+3. 拉取（**名称不变**）：
+
+```bash
+docker pull nginx:alpine
+```
+
+> `registry-mirrors` **只作用于 Docker Hub**。GHCR / Quay 等请用方式 B。
+
+---
+
+**方式 B — 多仓库：内网 DNS / hosts 把官方 Registry 主机指到代理**
+
+镜像名仍带官方前缀（`ghcr.io/...`、`quay.io/...`），解析落到代理后，Host 仍是官方名，代理据此匹配上游。
+
+1. 代理 `hosts` 使用**官方主机名**（与镜像引用一致）：
+
+```yaml
+registries:
+  - name: dockerhub
+    hosts: ["registry-1.docker.io", "docker.io"]
+    upstream: "https://registry-1.docker.io"
+  - name: ghcr
+    hosts: ["ghcr.io"]
+    upstream: "https://ghcr.io"
+```
+
+2. 内网 DNS 或客户端 hosts 示例：
+
+```text
+10.0.0.8  registry-1.docker.io docker.io ghcr.io
+```
+
+3. 拉取（**名称不变**）：
+
+```bash
+docker pull nginx:alpine
+docker pull ghcr.io/owner/image:tag
+```
+
+HTTPS 注意：浏览器/Docker 会校验证书是否匹配 `ghcr.io` 等官方名。内网常见做法是：
+
+- 代理前用企业证书做 TLS 终结，或  
+- 内网仅 HTTP + 按需 `insecure-registries`  
+
+详见 [deploy/README.md](./deploy/README.md)。
+
+---
+
+**代理侧可选：拉取鉴权**
+
+若开启 `pull_auth`，客户端对**实际连上的 Registry 主机**做 `docker login`（mirrors 场景 login 代理地址；DNS 劫持场景 login `ghcr.io` 等——凭证由代理校验，不会代替你登录上游）。
+
+#### 小结
+
+| 项目 | 说明 |
+|------|------|
+| 镜像名 | **不改**，与直连上游相同 |
+| 代理对外 | 域名或 IP:端口 均可 |
+| Hub 接入 | 优先 `registry-mirrors` |
+| 多上游接入 | 官方主机名写入 `hosts` + DNS/解析指到代理 |
+| 上游账号 | 只配在代理 `registries[].auth` |
 
 自检：
 
 ```bash
-curl -H 'Host: hub.example.com' http://127.0.0.1:5000/v2/
+curl -H 'Host: registry-1.docker.io' http://127.0.0.1:5000/v2/
 # 期望：HTTP 200
 ```
 
-### 5. 打开统计网页
+### 4. 打开统计网页
 
 临时在本机访问管理面时，在 `deploy/docker-compose.yaml` 中取消注释：
 
@@ -136,63 +253,147 @@ go run ./cmd/proxy -config configs/config.yaml
 
 ---
 
-## 配置要点
+## 配置上游仓库（重点）
 
-完整字段见：
+每一条 `registries`：**到达代理的 Host 是什么 → 转发到哪个真实仓库**。  
+客户端镜像名仍用官方写法；`hosts` 填请求里会出现的 Host（官方仓库主机名，和/或 mirrors 用的代理域名/IP）。
 
-- [configs/config.example.yaml](./configs/config.example.yaml) — 本地示例  
-- [configs/config.docker.yaml](./configs/config.docker.yaml) — 容器路径  
-- [.env.example](./.env.example) — 密钥与引导账号  
+### 一条 registry 的字段
+
+```yaml
+registries:
+  - name: dockerhub          # 内部名称；可被全局 default 引用
+    enabled: true
+    hosts:                   # 请求 Host 匹配列表（可多个）
+      - "registry-1.docker.io"  # DNS 劫持 / 原样 Host
+      - "docker.io"
+      - "10.0.0.8:5000"         # registry-mirrors 指向的代理地址
+    upstream: "https://registry-1.docker.io"   # 真实上游，建议 https
+    auth:
+      type: token            # token | anonymous | basic（见下表）
+      username: "${DOCKERHUB_USER}"
+      password: "${DOCKERHUB_TOKEN}"
+    token_cache_ttl: 3600
+    # insecure_skip_verify: false
+```
+
+| 字段 | 含义 |
+|------|------|
+| `hosts` | 用于匹配入站请求的 Host：官方 Registry 主机名，和/或 mirrors 用的域名、IP:端口 |
+| `upstream` | 匹配成功后，代理去请求的真实 Registry URL |
+| `auth` | **代理 → 上游** 的凭据（不是网页登录，也不是客户端 pull_auth） |
+| `default`（全局） | 未命中任何 `hosts` 时回落的 `name`；mirrors 常用 `dockerhub`；公网慎用开放回落 |
+
+### 上游鉴权 `auth.type`（代理 → 上游）
+
+| type | 何时用 | username / password |
+|------|--------|---------------------|
+| **`token`** | Docker Hub、GHCR、Quay 等标准 Bearer / OAuth 换票（最常见） | 可选。**不填** = 匿名拉公共镜像；**填写** = 提高 Hub 限流配额、拉私有库 |
+| **`anonymous`** | 上游完全不要求登录 | 忽略 |
+| **`basic`** | 上游只要 HTTP Basic（少数私有 Registry） | 必填，直接作为 Basic 发给上游 |
+
+**Docker Hub 示例（推荐用环境变量，勿写死密码）：**
+
+```yaml
+# configs/config.yaml
+auth:
+  type: token
+  username: "${DOCKERHUB_USER}"
+  password: "${DOCKERHUB_TOKEN}"
+```
+
+```bash
+# .env 或 shell
+export DOCKERHUB_USER='your-dockerhub-username'
+export DOCKERHUB_TOKEN='dckr_pat_xxxx'   # 使用 Access Token，不要用账户登录密码
+```
+
+**GHCR 私有镜像示例：**
+
+```yaml
+- name: ghcr
+  hosts: ["ghcr.io"]
+  upstream: "https://ghcr.io"
+  auth:
+    type: token
+    username: "${GITHUB_USER}"       # 任意非空用户名即可，常用自己的 GitHub 用户名
+    password: "${GITHUB_TOKEN}"      # PAT，需 read:packages
+```
+
+**完全匿名公共库：**
+
+```yaml
+auth:
+  type: anonymous
+# 或 type: token 且不填 username/password
+```
+
+**私有 Basic 上游：**
+
+```yaml
+auth:
+  type: basic
+  username: "${REGISTRY_USER}"
+  password: "${REGISTRY_PASSWORD}"
+```
+
+### 两类「登录」不要混
+
+| | 配置位置 | 谁用 | 作用 |
+|--|----------|------|------|
+| **上游鉴权** | `registries[].auth` | 代理进程访问 Hub/GHCR… | 限流、私有镜像 |
+| **客户端拉取鉴权** | `pull_auth` + `pull_users` | 员工 `docker login 你的域名` | 谁能通过**本代理**拉镜像 |
+| **网页控制台** | `PROXY_WEB_*` / `web_users` | 浏览器 | 看统计、管账号 |
+
+### 其它常用项
+
+完整字段见 [configs/config.example.yaml](./configs/config.example.yaml)、[configs/config.docker.yaml](./configs/config.docker.yaml)、[.env.example](./.env.example)。
 
 | 你想… | 改什么 |
 |--------|--------|
-| 增加 / 修改加速域名 | `registries[].hosts` 与 DNS |
-| 换上游地址 | `registries[].upstream` |
-| 公网防滥用 | `access_control.mode: whitelist`，或开启下方拉取鉴权 |
-| 禁止「随便 Host 都能当加速」 | `default: ""`（未知域名 → 404） |
-| 网页管理员 | 环境变量 `PROXY_WEB_USER` / `PROXY_WEB_PASSWORD`（仅库为空时引导一次） |
-| 运维 API / metrics 备用令牌 | `PROXY_ADMIN_TOKEN` |
+| 增加一个上游 | 追加 `registries`，`hosts` 写对应官方主机名（及接入方式相关 Host） |
+| Hub 用 mirrors | `registry-mirrors` 指向代理；`hosts` 含代理地址和/或设 `default: dockerhub` |
+| 公网防滥用 | `access_control.mode: whitelist`，或 `pull_auth.mode: required` |
+| 禁止未知 Host 回落 | `default: ""` |
+| 网页管理员 | `PROXY_WEB_USER` / `PROXY_WEB_PASSWORD`（空库首次引导） |
+| 运维 API / metrics | `PROXY_ADMIN_TOKEN` |
 
-密钥请用环境变量注入，**不要**写进仓库。
-
-配置改完后：
+密钥用环境变量 / `.env`，**不要**提交真值。改完配置后：
 
 ```bash
-# Compose：向进程发 SIGHUP，或
 curl -X POST -H "Authorization: Bearer $PROXY_ADMIN_TOKEN" http://127.0.0.1:5001/-/reload
+# 或 Compose: docker kill -s HUP $(docker compose -f deploy/docker-compose.yaml ps -q proxy)
 ```
 
-热重载会更新路由 / ACL / 限流 / 上游，**不会**重开数据库；改库路径需重启。  
-`/-/config` 与 `/-/reload` 仅 **管理员** 或 ops token 可用（viewer 只读统计）。
+热重载：路由 / ACL / 限流 / 上游与 token 缓存。**不**重开数据库。  
+`/-/config`、`/-/reload` 仅 **admin** 或 ops token。
 
 ---
 
-## 可选：客户端拉取鉴权
+## 可选：客户端拉取鉴权（访问本代理）
 
-默认 **匿名可拉**（`pull_auth.mode: off`）。若只想让有账号的人通过代理拉镜像：
+默认 **匿名可拉**（`pull_auth.mode: off`）。若只允许有账号的人走代理：
 
 ```yaml
 pull_auth:
-  mode: required   # 或 optional：匿名可拉，但若带了密码则必须正确
+  mode: required   # off | optional | required
   realm: easy-docker-proxy
 ```
 
-创建拉取账号（与网页登录账号**不是**同一套）：
-
 ```bash
-# 首次可在 .env 中设置（表为空且密码 ≥8 位时自动创建）
+# 首次引导（pull_users 表为空且密码 ≥8 位）
 PROXY_PULL_USER=puller
 PROXY_PULL_PASSWORD='your-pull-password'
 ```
 
-或在网页 **账号 → Docker 拉取账号** 中管理。客户端：
+或在网页 **账号 → Docker 拉取账号** 管理。客户端对**实际连上的 Registry 主机**登录（mirrors 则 login 代理地址），镜像名仍不改写：
 
 ```bash
-docker login hub.example.com -u puller -p 'your-pull-password'
-docker pull hub.example.com/library/nginx:alpine
+docker login 10.0.0.8:5000 -u puller -p 'your-pull-password'
+docker pull nginx:alpine
 ```
 
-客户端密码只用于访问**本代理**，不会转发给上游 Registry。
+此密码只校验本代理，**不会**转发给上游。
 
 ---
 
@@ -210,16 +411,24 @@ docker pull hub.example.com/library/nginx:alpine
 ## 常见问题
 
 **拉不动 / 超时？**  
-确认 DNS 或 hosts、边缘是否保留原始 `Host`、防火墙是否放行数据面端口。
+1. 流量是否真的到了代理（`registry-mirrors` / DNS 是否生效）。  
+2. 代理 `hosts` 是否包含请求里的 Host（官方名或 mirrors 地址）。  
+3. 防火墙、HTTP `insecure-registries`、反代是否保留 Host。
 
-**Hub 报限流？**  
-配置 `DOCKERHUB_USER` / `DOCKERHUB_TOKEN`（或上游 PAT）。
+**HTTP 访问报证书 / HTTPS 错误？**  
+数据面未上 TLS 时，在客户端 `insecure-registries` 加入代理地址；DNS 劫持官方名时证书更棘手，见上文方式 B。
+
+**Hub 报限流 / 私有库 401？**  
+在对应 `registries[].auth` 配置 `type: token` 与 PAT（`${ENV}` 注入），这是代理访问上游用的，不是客户端密码。
+
+**为什么不能改镜像名成自己的域名？**  
+可以改，但不是本项目推荐用法。推荐 **镜像名与直连上游一致**，只改接入（mirrors / DNS）。
 
 **网页打不开 / 登不进？**  
 确认已映射 `127.0.0.1:5001`、设置了 `PROXY_WEB_PASSWORD` 且是**首次**空库引导；密码至少 8 位。
 
 **只想看统计、不能改配置？**  
-正确：网页只做展示与账号管理，改代理规则请编辑 `config.yaml` 后重载。
+正确：网页只做展示与账号管理；改路由/上游请编辑 `config.yaml` 后重载。
 
 **和 Docker-Proxy 什么关系？**  
 数据面思路借鉴了 [Docker-Proxy](https://github.com/dqzboy/Docker-Proxy)，但本项目**不是**其 fork，也**不包含**容器管理能力。

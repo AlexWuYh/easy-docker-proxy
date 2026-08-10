@@ -23,7 +23,7 @@ cp .env.example .env
 echo "PROXY_ADMIN_TOKEN=$(openssl rand -hex 32)" >> .env
 
 cp configs/config.docker.yaml configs/config.yaml
-# 编辑 configs/config.yaml：把 hub.example.com 等改成你的域名
+# 确认 hosts 为官方 Registry 主机名，和/或 registry-mirrors 使用的代理地址
 # 公网环境建议 access_control.mode: whitelist
 ```
 
@@ -31,24 +31,38 @@ cp configs/config.docker.yaml configs/config.yaml
 
 ```bash
 docker compose -f deploy/docker-compose.yaml up -d --build
-curl -H 'Host: hub.example.com' http://127.0.0.1:5000/v2/
+curl -H 'Host: registry-1.docker.io' http://127.0.0.1:5000/v2/
 ```
 
-### 3. 带 TLS 边缘（Caddy）
+### 3. 客户端：镜像名不改，只改接入
 
-1. DNS：`hub` / `ghcr` / … 子域名 A 记录指向本机  
-2. 编辑 `deploy/Caddyfile` 中的域名  
-3. 启动 edge profile：
+```bash
+# 与直连上游时相同，不要改写成自定义域名镜像名
+docker pull nginx:alpine
+docker pull ghcr.io/owner/image:tag
+```
+
+**Docker Hub（推荐）** — 客户端 `daemon.json`：
+
+```json
+{
+  "registry-mirrors": ["http://<代理IP>:5000"],
+  "insecure-registries": ["<代理IP>:5000"]
+}
+```
+
+代理 `hosts` 需包含该 mirrors 地址，或设置 `default: dockerhub`。
+
+**多仓库** — 内网 DNS 将 `registry-1.docker.io`、`ghcr.io` 等指到代理，且 `registries[].hosts` 填写这些官方主机名。
+
+上游凭据：`registries[].auth`。可选客户端 `pull_auth`。详见根目录 [README.md](../README.md)。
+
+### 4. TLS 边缘（Caddy，可选）
+
+示例 `Caddyfile` 使用自有子域名做反代；若采用「官方主机名 + DNS」方案，证书需自行规划（企业 CA 等），不能对公网申请 `ghcr.io` 的证书。
 
 ```bash
 docker compose -f deploy/docker-compose.yaml --profile edge up -d --build
-```
-
-### 4. 客户端拉取
-
-```bash
-docker pull hub.example.com/library/nginx:alpine
-docker pull ghcr.example.com/owner/image:tag
 ```
 
 ### 5. Stats / Metrics（仅本机或内网）

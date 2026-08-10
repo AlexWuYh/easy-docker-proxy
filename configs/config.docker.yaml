@@ -59,11 +59,15 @@ admin:
   token_env: PROXY_ADMIN_TOKEN
   stats_require_auth: true
 
+# hosts = inbound Host values (official registry names and/or registry-mirrors address).
+# Clients keep original image names. auth = proxy→upstream. See README.
 registries:
   - name: dockerhub
     enabled: true
     hosts:
-      - "hub.example.com"
+      - "registry-1.docker.io"
+      - "docker.io"
+      # - "10.0.0.8:5000"   # if clients use registry-mirrors: ["http://10.0.0.8:5000"]
     upstream: "https://registry-1.docker.io"
     auth:
       type: token
@@ -74,15 +78,17 @@ registries:
   - name: ghcr
     enabled: true
     hosts:
-      - "ghcr.example.com"
+      - "ghcr.io"
     upstream: "https://ghcr.io"
     auth:
       type: token
+      # username: "${GITHUB_USER}"
+      # password: "${GITHUB_TOKEN}"
 
   - name: quay
     enabled: true
     hosts:
-      - "quay.example.com"
+      - "quay.io"
     upstream: "https://quay.io"
     auth:
       type: token
@@ -90,7 +96,7 @@ registries:
   - name: k8s
     enabled: true
     hosts:
-      - "k8s.example.com"
+      - "registry.k8s.io"
     upstream: "https://registry.k8s.io"
     auth:
       type: token
@@ -98,7 +104,7 @@ registries:
   - name: mcr
     enabled: true
     hosts:
-      - "mcr.example.com"
+      - "mcr.microsoft.com"
     upstream: "https://mcr.microsoft.com"
     auth:
       type: token
@@ -106,7 +112,7 @@ registries:
   - name: nvcr
     enabled: true
     hosts:
-      - "nvcr.example.com"
+      - "nvcr.io"
     upstream: "https://nvcr.io"
     auth:
       type: token
