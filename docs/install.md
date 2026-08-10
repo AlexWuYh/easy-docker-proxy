@@ -15,10 +15,23 @@
 
 **推荐接入模型（单域名混合）**
 
-1. 对外一个域名：`https://reg.a.c`（Caddy 等反代到本机 5000）  
-2. Docker Hub：客户端配置 `registry-mirrors` → 该域名，`docker pull nginx`  
-3. 其它上游：`docker pull reg.a.c/ghcr.io/owner/app:tag`（路径前缀）  
+1. 对外**你自己的**域名（文档里写的 `reg.a.c` / `reg.example.com` **只是占位示例**）  
+2. Docker Hub：客户端 `registry-mirrors` → 该域名，`docker pull nginx`  
+3. 其它上游：`docker pull <你的域名>/ghcr.io/owner/app:tag`（路径前缀）  
 4. **不要**用 `/etc/hosts` 劫持 `ghcr.io` 等官方域名（易 TLS 失败）
+
+### 域名与 DNS（必做）
+
+文档与配置模板中的域名均为**假想示例**，不会自动生效。你需要：
+
+| 步骤 | 说明 |
+|------|------|
+| 1. 申请域名 | 在任意域名注册商购买/使用自有域名，例如 `reg.example.com` |
+| 2. 添加解析 | A/AAAA 指到代理公网 IP，或 CNAME 到已有主机名；内网可用内网 DNS |
+| 3. 写入配置 | `config.yaml` 里 dockerhub 的 `hosts` 填**同一主机名**（不要带 `https://`） |
+| 4. 边缘 TLS | 在 Caddy/Nginx 中为该域名申请证书并反代到本机 `:5000` |
+
+解析未生效前，客户端 `registry-mirrors` / `docker pull <域名>/...` 会失败。可用 `ping` / `dig` 确认域名已指向代理机。
 
 ---
 
@@ -27,7 +40,7 @@
 - 64 位 Linux 主机（或本机 Docker Desktop）  
 - Docker + Docker Compose v2  
 - 出站 HTTPS（访问 Hub / GHCR 等上游）  
-- （推荐）已有 Caddy/Nginx 做 HTTPS；没有也可用 HTTP + `insecure-registries` 试用  
+- （推荐）**自有域名** + 已有 Caddy/Nginx 做 HTTPS；没有也可用 IP:5000 + HTTP 试用  
 
 可选：Go 1.22+（仅源码运行 / 开发）。
 
@@ -80,13 +93,13 @@ PROXY_WEB_PASSWORD=请换成足够长的密码
 cp configs/config.docker.yaml configs/config.yaml
 ```
 
-**必改一项**：把统一入口域名写进 dockerhub 的 `hosts`（与 Caddy 域名一致）：
+**必改一项**：把**你已申请并完成解析**的入口主机名写进 dockerhub 的 `hosts`（与 Caddy 站点名一致；模板里的 `reg.example.com` 请整段替换）：
 
 ```yaml
 registries:
   - name: dockerhub
     hosts:
-      - "reg.a.c"    # ← 改成你的域名；勿带 https://
+      - "reg.example.com"    # ← 换成真实域名；勿带 https://
     path_prefixes:
       - "docker.io"
     # ...
@@ -113,8 +126,8 @@ docker compose -f deploy/docker-compose.yaml logs -f proxy
 ```bash
 # 数据面握手（Host 用你的入口域名）
 curl -sS -o /dev/null -w '%{http_code}\n' \
-  -H 'Host: reg.a.c' http://127.0.0.1:5000/v2/
-# 期望：200
+  -H 'Host: reg.example.com' http://127.0.0.1:5000/v2/
+# Host 换成你的真实域名；期望：200
 ```
 
 ---
@@ -125,10 +138,11 @@ curl -sS -o /dev/null -w '%{http_code}\n' \
 
 只跑本仓库的 **proxy**，**不要** `compose --profile edge`。
 
-在现有 Caddyfile 中增加（完整可复制文件：[deploy/caddy.external.example](../deploy/caddy.external.example)）：
+在现有 Caddyfile 中增加（完整可复制文件：[deploy/caddy.external.example](../deploy/caddy.external.example)）。  
+将下面的 `reg.example.com` 换成**你的真实域名**（须已解析到本机）：
 
 ```caddy
-reg.a.c {
+reg.example.com {
 	reverse_proxy 127.0.0.1:5000 {
 		header_up Host {host}
 		header_up X-Forwarded-Host {host}
@@ -150,10 +164,10 @@ reg.a.c {
 | 反代目标 | **5000**（数据面），不是 5001 |
 | Host | 保留客户端 Host，与 `hosts` / 默认路由一致 |
 | 超时 | 大层传输建议 `read_timeout 0` |
-| 证书 | 只给 `reg.a.c` 配证即可 |
+| 证书 | 只给**你的入口域名**配证即可（Caddy 自动 HTTPS 或自备证书） |
 | `trusted_proxies` | 同机需含 `127.0.0.1/32`（示例配置已有） |
 
-重载 Caddy 后，浏览器访问域名、客户端 mirrors 用 `https://reg.a.c`。
+重载 Caddy 后，客户端 mirrors 使用 `https://<你的域名>`。
 
 ### 4.2 无现成边缘时（可选）
 
@@ -180,11 +194,13 @@ docker compose -f deploy/docker-compose.yaml --profile edge up -d --build
 
 ## 5. 客户端配置
 
+下列命令中的 `reg.example.com` 均请换成你的真实域名（与 DNS、`hosts`、Caddy 一致）。
+
 ### 5.1 Docker Hub（mirrors）
 
 ```json
 {
-  "registry-mirrors": ["https://reg.a.c"]
+  "registry-mirrors": ["https://reg.example.com"]
 }
 ```
 
@@ -197,13 +213,13 @@ docker pull nginx:alpine
 
 ### 5.2 路径前缀（多上游）
 
-格式：`<入口主机>/<上游主机名>/<命名空间>/...`
+格式：`<你的入口主机>/<上游主机名>/<命名空间>/...`
 
 ```bash
-docker pull reg.a.c/ghcr.io/owner/app:tag
-docker pull reg.a.c/quay.io/prometheus/prometheus:latest
-docker pull reg.a.c/docker.io/library/nginx:latest
-docker pull reg.a.c/registry.k8s.io/pause:3.9
+docker pull reg.example.com/ghcr.io/owner/app:tag
+docker pull reg.example.com/quay.io/prometheus/prometheus:latest
+docker pull reg.example.com/docker.io/library/nginx:latest
+docker pull reg.example.com/registry.k8s.io/pause:3.9
 ```
 
 | 路径前缀 | 上游 name（配置） |
@@ -236,7 +252,7 @@ PROXY_PULL_PASSWORD=your-pull-password
 ```
 
 ```bash
-docker login reg.a.c -u puller -p 'your-pull-password'
+docker login reg.example.com -u puller -p 'your-pull-password'
 ```
 
 与网页账号、上游 Hub/GHCR 密码**不是**同一套。也可在统计页「账号 → Docker 拉取账号」管理。
@@ -371,9 +387,11 @@ CGO_ENABLED=0 go test ./...
 
 ## 9. 验收清单
 
+- [ ] 域名已申请，DNS 已解析到代理机  
+- [ ] `config.yaml` `hosts` 与 Caddy 站点名均为该真实域名  
 - [ ] `curl -H 'Host: <你的域名>' http://127.0.0.1:5000/v2/` → 200  
 - [ ] mirrors 配置后 `docker pull nginx:alpine` 成功  
-- [ ] `docker pull <域名>/ghcr.io/...` 成功（或可接受的上游错误，非代理 404）  
+- [ ] `docker pull <你的域名>/ghcr.io/...` 成功（或可接受的上游错误，非代理 404）  
 - [ ] 统计页可登录；看板「上游」有数据  
 - [ ] 未把 5001 暴露到公网  
 - [ ] 生产已设强 `PROXY_ADMIN_TOKEN` / `PROXY_WEB_PASSWORD`  
@@ -383,7 +401,7 @@ CGO_ENABLED=0 go test ./...
 ## 10. 常见问题
 
 **拉镜像 TLS 错误？**  
-检查是否错误劫持了 `ghcr.io` 的 DNS/hosts；应只访问你自己的 `reg.a.c`。
+检查是否错误劫持了 `ghcr.io` 的 DNS/hosts；应只访问**你自己申请并解析**的入口域名。
 
 **mirrors 后仍 404 unknown registry？**  
 确认 `default: dockerhub`，或把 mirrors 使用的 Host 写入某条 `hosts`。

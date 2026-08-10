@@ -2,9 +2,10 @@
 # 复制为 config.yaml 后按需修改；密钥用 ${ENV}，勿写死。
 #
 # 主模型（M6）：唯一对外域名 + 混合接入
-#   - mirrors: docker pull nginx  → registry-mirrors 指向 https://reg.example.com
-#   - 路径前缀: docker pull reg.example.com/ghcr.io/owner/app:tag
-#   - 勿用 DNS 劫持 ghcr.io 等官方名（易 TLS 失败）
+#   - mirrors: docker pull nginx  → registry-mirrors 指向 https://<你的域名>
+#   - 路径前缀: docker pull <你的域名>/ghcr.io/owner/app:tag
+#   - reg.example.com 仅为示例，须自行申请域名并添加 DNS 解析
+#   - 勿用 hosts 劫持 ghcr.io 等官方名（易 TLS 失败）
 
 server:
   # 数据面默认 5000（避免占用 80/443）
@@ -67,7 +68,7 @@ registries:
   - name: dockerhub
     enabled: true
     hosts:
-      - "reg.example.com" # 统一入口 Host（与 Caddy 域名一致，请改成你的）
+      - "reg.example.com" # 示例：换成已解析到本机的真实域名（勿带 https://）
     path_prefixes:
       - "docker.io"
     upstream: "https://registry-1.docker.io"

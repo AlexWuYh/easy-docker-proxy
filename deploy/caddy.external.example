@@ -1,12 +1,14 @@
 # 已有 Caddy：统一入口反代 easy-docker-proxy 数据面
 # 不要同时 compose --profile edge。
 #
+# reg.example.com 仅为示例：请改成你已申请并完成 DNS 解析的真实域名。
+#
 # 1. 只启动 proxy（宿主机 5000）
 # 2. trusted_proxies 含 Caddy 出口（同机 127.0.0.1/32）
-# 3. config 中 hosts 含本域名（如 reg.example.com），default: dockerhub
+# 3. config 中 hosts 含同一真实域名，default: dockerhub
 # 4. 客户端：
-#    - registry-mirrors: ["https://reg.example.com"]
-#    - docker pull reg.example.com/ghcr.io/owner/app:tag
+#    - registry-mirrors: ["https://<你的域名>"]
+#    - docker pull <你的域名>/ghcr.io/owner/app:tag
 
 reg.example.com {
 	reverse_proxy 127.0.0.1:5000 {

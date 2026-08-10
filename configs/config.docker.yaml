@@ -1,5 +1,6 @@
 # 容器部署配置 — 单域名混合接入（M6）
-# 复制为 configs/config.yaml；Caddy/域名请改 reg.example.com
+# 复制为 configs/config.yaml。
+# reg.example.com 为示例占位：请换成你已申请并解析到本机的真实域名（与 Caddy 一致）。
 # 密钥见 .env.example
 
 server:

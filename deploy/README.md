@@ -7,12 +7,14 @@
 
 ```text
 客户端
-  · mirrors:  docker pull nginx          ──┐
-  · 路径前缀: docker pull reg.a.c/ghcr.io/…┤
-                                           ▼
-              Caddy https://reg.a.c  →  127.0.0.1:5000  proxy
+  · mirrors:  docker pull nginx                 ──┐
+  · 路径前缀: docker pull <你的域名>/ghcr.io/…   ┤
+                                                  ▼
+              Caddy https://<你的域名>  →  127.0.0.1:5000  proxy
 管理面 :5001 默认不映射；勿 DNS 劫持 ghcr.io（TLS 易失败）
 ```
+
+> 文档中的 `reg.a.c` / `reg.example.com` 为**示例占位**。域名需自行申请，并添加 A/AAAA 或 CNAME 解析到代理主机，再在 Caddy 与 `config.yaml` 的 `hosts` 中填写真实主机名。
 
 - **不**挂载 `docker.sock`；镜像层不落盘  
 - TLS：**优先已有 Caddy** 反代到 **5000**；compose `edge` 仅备选（8080/8443）
@@ -42,39 +44,39 @@ curl -H 'Host: registry-1.docker.io' http://127.0.0.1:5000/v2/
 ### 3. 客户端：单域名混合模式
 
 ```bash
-# A. Hub（mirrors → https://reg.a.c）
+# A. Hub（mirrors → https://你的域名）
 docker pull nginx:alpine
 
-# B. 其它上游 / 显式 Hub（路径前缀，同一域名）
-docker pull reg.a.c/ghcr.io/owner/app:tag
-docker pull reg.a.c/docker.io/library/nginx:latest
+# B. 其它上游（路径前缀；将 reg.example.com 换成真实域名）
+docker pull reg.example.com/ghcr.io/owner/app:tag
+docker pull reg.example.com/docker.io/library/nginx:latest
 ```
 
 **不要**把 `ghcr.io` 等写进 `/etc/hosts` 指到代理（证书对不上）。
 
-mirrors 示例：
+mirrors 示例（域名须已解析）：
 
 ```json
-{ "registry-mirrors": ["https://reg.a.c"] }
+{ "registry-mirrors": ["https://reg.example.com"] }
 ```
 
-上游凭据：`registries[].auth`。详见 [README.md](../README.md)。
+上游凭据：`registries[].auth`。详见 [README.md](../README.md)、[docs/install.md](../docs/install.md)。
 
 ### 4. 使用已有 Caddy（推荐）
 
-统一域名 → 数据面 **5000** 即可；**不要** `compose --profile edge`（除非没有现成 Caddy）。
+**真实域名** → 数据面 **5000**；**不要** `compose --profile edge`（除非没有现成 Caddy）。
 
 ```bash
 docker compose -f deploy/docker-compose.yaml up -d --build
-curl -sS -o /dev/null -w '%{http_code}\n' -H 'Host: reg.a.c' http://127.0.0.1:5000/v2/
+curl -sS -o /dev/null -w '%{http_code}\n' -H 'Host: reg.example.com' http://127.0.0.1:5000/v2/
 ```
 
 `trusted_proxies` 含 Caddy 出口（同机保留 `127.0.0.1/32`）。
 
-完整片段：[caddy.external.example](./caddy.external.example)。
+完整片段：[caddy.external.example](./caddy.external.example)（站点名改成你的域名）。
 
 ```caddy
-reg.a.c {
+reg.example.com {
 	reverse_proxy 127.0.0.1:5000 {
 		header_up Host {host}
 		header_up X-Forwarded-Host {host}
@@ -94,7 +96,7 @@ reg.a.c {
 | 反代目标 | **5000**（数据面），不是 5001 |
 | Host | 保留 `{host}`，与 config `hosts` / 默认路由一致 |
 | 超时 | blob 用 `read_timeout 0` |
-| 证书 | 仅需 `reg.a.c`，无需 ghcr.io 证书 |
+| 证书 | 只给**你的入口域名**配证，无需 ghcr.io 证书 |
 
 可选自带 Caddy：`--profile edge`（默认宿主机 8080/8443）。
 
