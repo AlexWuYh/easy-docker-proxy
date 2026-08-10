@@ -432,3 +432,4 @@ CGO_ENABLED=0 go test ./...
 | [configs/config.docker.yaml](../configs/config.docker.yaml) | 容器配置模板 |
 | [configs/config.example.yaml](../configs/config.example.yaml) | 本地配置模板 |
 | [.env.example](../.env.example) | 环境变量模板 |
+| [docs/images/](./images/) | 统计控制台截图（README 预览用） |

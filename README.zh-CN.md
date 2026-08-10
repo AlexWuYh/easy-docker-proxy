@@ -17,6 +17,24 @@
 
 ---
 
+## 界面预览
+
+统计控制台截图（演示数据）。点击图片可查看大图。
+
+| 登录 | 分析看板 |
+|:----:|:--------:|
+| ![登录](./docs/images/stats-login.png) | ![分析看板](./docs/images/stats-dashboard.png) |
+
+| 上游仓库分析 | 镜像列表 |
+|:------------:|:--------:|
+| ![上游](./docs/images/stats-upstream.png) | ![镜像](./docs/images/stats-images.png) |
+
+<p align="center">
+  <img src="./docs/images/stats-events.png" alt="事件" width="90%" />
+</p>
+
+---
+
 ## 快速部署
 
 ```bash

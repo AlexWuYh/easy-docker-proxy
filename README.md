@@ -17,6 +17,24 @@ Full install and configuration (currently in Chinese): **[docs/install.md](./doc
 
 ---
 
+## Screenshots
+
+Stats console (demo data). Click for full size.
+
+| Login | Dashboard |
+|:-----:|:---------:|
+| ![Login](./docs/images/stats-login.png) | ![Dashboard](./docs/images/stats-dashboard.png) |
+
+| Upstream analytics | Images |
+|:------------------:|:------:|
+| ![Upstream](./docs/images/stats-upstream.png) | ![Images](./docs/images/stats-images.png) |
+
+<p align="center">
+  <img src="./docs/images/stats-events.png" alt="Events" width="90%" />
+</p>
+
+---
+
 ## Quick deploy
 
 ```bash
