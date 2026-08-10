@@ -1,51 +1,53 @@
 # easy-docker-proxy
 
-多上游 Docker Registry **加速代理**。
+**English** | [中文](./README.zh-CN.md)
 
-- 流式转发，**不缓存镜像层**
-- 记录拉取并提供统计网页
-- 一个**自有域名**入口，客户端用 **mirrors + 路径前缀**
-- 无 Docker socket、无容器管理
+Lightweight **multi-upstream Docker Registry proxy**.
 
-> **关于文档中的域名**  
-> `reg.a.c`、`reg.example.com`、`https://reg.a.c` **只是示例**，不会自动生效。  
-> 使用前请：① 自行申请域名 → ② 配置 A/AAAA（或 CNAME）解析到代理机 → ③ 在 Caddy/Nginx 与 `config.yaml` 的 `hosts` 中填写**真实主机名**。
+- Streaming pull-through — **no image layer cache**
+- Pull records and a simple Stats web UI
+- Single **your own domain** entry via **registry-mirrors + path prefixes**
+- No Docker socket, no container management
 
-详细步骤见 **[安装与配置指南](./docs/install.md)**。
+> **About domains in this docs**  
+> Names like `reg.a.c`, `reg.example.com`, and `https://reg.a.c` are **examples only**.  
+> Before production use: (1) register a domain, (2) point A/AAAA (or CNAME) at the proxy host, (3) put the **real hostname** in Caddy/Nginx and in `config.yaml` → `hosts`.
+
+Full install and configuration (currently in Chinese): **[docs/install.md](./docs/install.md)**.
 
 ---
 
-## 快速部署
+## Quick deploy
 
 ```bash
 git clone https://github.com/AlexWuYh/easy-docker-proxy.git
 cd easy-docker-proxy
 
 cp .env.example .env
-# 填写 PROXY_ADMIN_TOKEN、PROXY_WEB_PASSWORD
+# Set PROXY_ADMIN_TOKEN and PROXY_WEB_PASSWORD
 
 cp configs/config.docker.yaml configs/config.yaml
-# 将 hosts 中的 reg.example.com 改成你的真实域名
+# Replace hosts: reg.example.com with your real domain
 
 docker compose -f deploy/docker-compose.yaml up -d --build
 ```
 
-| 项 | 说明 |
-|----|------|
-| 数据面 | 主机 **:5000**（不占 80/443） |
-| 管理面 | **:5001**，默认不映射到公网 |
-| HTTPS | 推荐已有 Caddy 反代到 `127.0.0.1:5000` |
-| 统计页 | 映射 `127.0.0.1:5001` 后访问 `/stats/login.html` |
+| Item | Detail |
+|------|--------|
+| Data plane | Host **:5000** (not 80/443) |
+| Admin plane | **:5001**, not published publicly by default |
+| HTTPS | Prefer your existing Caddy → `127.0.0.1:5000` |
+| Stats UI | Map `127.0.0.1:5001`, open `/stats/login.html` |
 
-更多运维与安全说明：[deploy/README.md](./deploy/README.md)。
+Ops and security notes: [deploy/README.md](./deploy/README.md).
 
 ---
 
-## 客户端怎么用
+## Client usage
 
-以下将 **`reg.a.c` 换成你的域名**。
+Replace **`reg.a.c`** with your domain everywhere below.
 
-### 1. Docker Hub（mirrors，无路径前缀）
+### 1. Docker Hub (registry-mirrors, no path prefix)
 
 ```json
 // /etc/docker/daemon.json
@@ -59,9 +61,9 @@ systemctl restart docker   # Linux
 docker pull nginx:alpine
 ```
 
-HTTP 入口时需配置 `insecure-registries`。
+For plain HTTP endpoints, also set `insecure-registries`.
 
-### 2. 其它上游（路径前缀）
+### 2. Other upstreams (path prefix on the same domain)
 
 ```bash
 docker pull reg.a.c/ghcr.io/owner/app:tag
@@ -70,52 +72,53 @@ docker pull reg.a.c/docker.io/library/nginx:latest
 docker pull reg.a.c/registry.k8s.io/pause:3.9
 ```
 
-代理按路径前缀选择上游，**剥掉前缀**后再请求真实仓库。  
-**不要**用 `/etc/hosts` 把 `ghcr.io` 等官方名指到本机（易 TLS 失败）。
+The proxy picks the upstream from the path prefix and **strips the prefix** before calling the real registry.  
+**Do not** hijack official names like `ghcr.io` via `/etc/hosts` (TLS certificate mismatch).
 
 ---
 
-## 支持的上游仓库
+## Supported upstreams
 
-默认配置：[configs/config.docker.yaml](./configs/config.docker.yaml)。
+Default config: [configs/config.docker.yaml](./configs/config.docker.yaml).
 
-路径前缀用法：
+Path-prefix form:
 
 ```text
-docker pull <你的域名>/<路径前缀>/...
+docker pull <your-domain>/<path-prefix>/...
 ```
 
-Docker Hub 也可用 mirrors，直接 `docker pull nginx`（无前缀）。
+Docker Hub can also use mirrors with no prefix: `docker pull nginx`.
 
-| name | 上游 | 路径前缀 | 拉取示例 | 鉴权环境变量（可选） |
-|------|------|----------|----------|----------------------|
-| `dockerhub` | Docker Hub | `docker.io` + mirrors 无前缀 | `nginx` 或 `<域>/docker.io/library/nginx:latest` | `DOCKERHUB_USER` / `DOCKERHUB_TOKEN` |
-| `ghcr` | GHCR | `ghcr.io` | `<域>/ghcr.io/owner/app:tag` | `GITHUB_USER` / `GITHUB_TOKEN` |
-| `quay` | Quay.io | `quay.io` | `<域>/quay.io/org/img:tag` | `QUAY_USER` / `QUAY_TOKEN` |
-| `gcr` | GCR | `gcr.io` | `<域>/gcr.io/project/img:tag` | `GCR_USER` / `GCR_TOKEN` |
-| `k8s` | Kubernetes | `registry.k8s.io`、`k8s.gcr.io` | `<域>/registry.k8s.io/pause:3.9` | 默认匿名 |
-| `mcr` | Microsoft MCR | `mcr.microsoft.com` | `<域>/mcr.microsoft.com/...` | 默认匿名 |
-| `nvcr` | NVIDIA NGC | `nvcr.io` | `<域>/nvcr.io/...` | `NVCR_USER` / `NVCR_TOKEN` |
-| `elastic` | Elastic | `docker.elastic.co` | `<域>/docker.elastic.co/...` | `ELASTIC_USER` / `ELASTIC_TOKEN` |
-| `ecr-public` | AWS Public ECR | `public.ecr.aws` | `<域>/public.ecr.aws/...` | 默认匿名 |
+| name | Upstream | Path prefix | Pull example | Auth env (optional) |
+|------|----------|-------------|--------------|---------------------|
+| `dockerhub` | Docker Hub | `docker.io` + mirrors (no prefix) | `nginx` or `<dom>/docker.io/library/nginx:latest` | `DOCKERHUB_USER` / `DOCKERHUB_TOKEN` |
+| `ghcr` | GHCR | `ghcr.io` | `<dom>/ghcr.io/owner/app:tag` | `GITHUB_USER` / `GITHUB_TOKEN` |
+| `quay` | Quay.io | `quay.io` | `<dom>/quay.io/org/img:tag` | `QUAY_USER` / `QUAY_TOKEN` |
+| `gcr` | GCR | `gcr.io` | `<dom>/gcr.io/project/img:tag` | `GCR_USER` / `GCR_TOKEN` |
+| `k8s` | Kubernetes | `registry.k8s.io`, `k8s.gcr.io` | `<dom>/registry.k8s.io/pause:3.9` | anonymous by default |
+| `mcr` | Microsoft MCR | `mcr.microsoft.com` | `<dom>/mcr.microsoft.com/...` | anonymous by default |
+| `nvcr` | NVIDIA NGC | `nvcr.io` | `<dom>/nvcr.io/...` | `NVCR_USER` / `NVCR_TOKEN` |
+| `elastic` | Elastic | `docker.elastic.co` | `<dom>/docker.elastic.co/...` | `ELASTIC_USER` / `ELASTIC_TOKEN` |
+| `ecr-public` | AWS Public ECR | `public.ecr.aws` | `<dom>/public.ecr.aws/...` | anonymous by default |
 
-- 环境变量模板：[.env.example](./.env.example)。**留空 = 公共匿名**；私有库或 Hub 限流时再填 Token。  
-- 配置中可设 `enabled: false` 关闭某上游，或自行追加 `registries`。  
-- 字段说明：[docs/install.md](./docs/install.md)。
-
----
-
-## 文档
-
-| 文档 | 内容 |
-|------|------|
-| [docs/install.md](./docs/install.md) | 安装、配置项、Caddy、验收、FAQ |
-| [deploy/README.md](./deploy/README.md) | 部署架构、安全清单、备份 |
-| [configs/config.example.yaml](./configs/config.example.yaml) | 本地配置模板 |
+- Env template: [.env.example](./.env.example). **Empty = public anonymous**; set tokens for private pulls or Hub rate limits.  
+- Set `enabled: false` to disable an upstream, or add your own `registries` entry.  
+- Field reference: [docs/install.md](./docs/install.md) (Chinese).
 
 ---
 
-## 开发
+## Docs
+
+| Doc | Content |
+|-----|---------|
+| [README.zh-CN.md](./README.zh-CN.md) | Chinese README |
+| [docs/install.md](./docs/install.md) | Install, config, Caddy, checklist, FAQ (Chinese) |
+| [deploy/README.md](./deploy/README.md) | Deploy architecture, security, backup (Chinese) |
+| [configs/config.example.yaml](./configs/config.example.yaml) | Local config template |
+
+---
+
+## Development
 
 ```bash
 export PROXY_ADMIN_TOKEN="$(openssl rand -hex 32)"
@@ -126,8 +129,8 @@ CGO_ENABLED=0 go test ./...
 
 ---
 
-## 致谢 / License
+## Acknowledgments / License
 
-数据面思路借鉴 [Docker-Proxy](https://github.com/dqzboy/Docker-Proxy)（非其 fork，无容器管理）。
+Data-plane ideas inspired by [Docker-Proxy](https://github.com/dqzboy/Docker-Proxy) (not a fork; no container management).
 
 [MIT](./LICENSE)

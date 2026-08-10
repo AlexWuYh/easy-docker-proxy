@@ -1,7 +1,7 @@
 # 安装与配置指南
 
 本文是 **easy-docker-proxy** 的完整安装、配置与验收说明。  
-产品简介与命令速查见根目录 [README.md](../README.md)；生产运维清单见 [deploy/README.md](../deploy/README.md)。
+产品简介与命令速查见根目录 [README.md](../README.md)（English）/ [README.zh-CN.md](../README.zh-CN.md)（中文）；生产运维清单见 [deploy/README.md](../deploy/README.md)。
 
 ---
 
@@ -424,7 +424,8 @@ CGO_ENABLED=0 go test ./...
 
 | 路径 | 用途 |
 |------|------|
-| [README.md](../README.md) | 产品简介与速查 |
+| [README.md](../README.md) | 产品简介与速查（English） |
+| [README.zh-CN.md](../README.zh-CN.md) | 产品简介与速查（中文） |
 | [docs/install.md](./install.md) | **本文：安装与配置** |
 | [deploy/README.md](../deploy/README.md) | 部署架构、安全清单、备份 |
 | [deploy/caddy.external.example](../deploy/caddy.external.example) | 已有 Caddy 片段 |
