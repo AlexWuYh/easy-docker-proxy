@@ -47,7 +47,7 @@ cp .env.example .env
 cp configs/config.docker.yaml configs/config.yaml
 # Replace hosts: reg.example.com with your real domain
 
-docker compose -f deploy/docker-compose.yaml up -d --build
+docker compose --env-file .env -f deploy/docker-compose.yaml up -d --build
 ```
 
 | Item | Detail |

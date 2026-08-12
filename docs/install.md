@@ -109,16 +109,19 @@ registries:
 
 ### 3.4 启动
 
-在仓库**根目录**执行：
+在仓库**根目录**执行（`.env` 在根目录；compose 文件在 `deploy/`，须用 `--env-file` 显式指定）：
 
 ```bash
-docker compose -f deploy/docker-compose.yaml up -d --build
+docker compose --env-file .env -f deploy/docker-compose.yaml up -d --build
 ```
+
+> **说明**：`docker compose -f deploy/...` 默认把 project 目录设为 `deploy/`，会去找 `deploy/.env`。  
+> 本仓库约定 `.env` 在根目录，因此所有 compose 命令都带 `--env-file .env`。
 
 查看日志：
 
 ```bash
-docker compose -f deploy/docker-compose.yaml logs -f proxy
+docker compose --env-file .env -f deploy/docker-compose.yaml logs -f proxy
 ```
 
 ### 3.5 自检
@@ -172,7 +175,7 @@ reg.example.com {
 ### 4.2 无现成边缘时（可选）
 
 ```bash
-docker compose -f deploy/docker-compose.yaml --profile edge up -d --build
+docker compose --env-file .env -f deploy/docker-compose.yaml --profile edge up -d --build
 ```
 
 默认映射 **8080/8443**（避免占 80/443）。配置见 [deploy/Caddyfile](../deploy/Caddyfile)。
@@ -334,7 +337,7 @@ curl -X POST -H "Authorization: Bearer $PROXY_ADMIN_TOKEN" \
 或：
 
 ```bash
-docker kill -s HUP $(docker compose -f deploy/docker-compose.yaml ps -q proxy)
+docker kill -s HUP $(docker compose --env-file .env -f deploy/docker-compose.yaml ps -q proxy)
 ```
 
 重载范围：路由 / ACL / 限流 / 上游与 Token 缓存。  

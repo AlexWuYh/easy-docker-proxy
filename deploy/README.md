@@ -21,6 +21,9 @@
 
 ## 快速部署（VPS）
 
+> **`.env` 位置**：仓库**根目录**（`.env.example` 同处）。  
+> compose 文件在 `deploy/`，默认会在 `deploy/` 下找 `.env`，因此命令统一加 **`--env-file .env`**（在根目录执行）。
+
 ### 1. 准备密钥与配置
 
 ```bash
@@ -37,7 +40,7 @@ cp configs/config.docker.yaml configs/config.yaml
 ### 2. 仅数据面
 
 ```bash
-docker compose -f deploy/docker-compose.yaml up -d --build
+docker compose --env-file .env -f deploy/docker-compose.yaml up -d --build
 curl -H 'Host: registry-1.docker.io' http://127.0.0.1:5000/v2/
 ```
 
@@ -67,7 +70,7 @@ mirrors 示例（域名须已解析）：
 **真实域名** → 数据面 **5000**；**不要** `compose --profile edge`（除非没有现成 Caddy）。
 
 ```bash
-docker compose -f deploy/docker-compose.yaml up -d --build
+docker compose --env-file .env -f deploy/docker-compose.yaml up -d --build
 curl -sS -o /dev/null -w '%{http_code}\n' -H 'Host: reg.example.com' http://127.0.0.1:5000/v2/
 ```
 
@@ -162,7 +165,7 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:5001/metrics
 修改挂载的 `config.yaml` 后：
 
 ```bash
-docker kill -s HUP $(docker compose -f deploy/docker-compose.yaml ps -q proxy)
+docker kill -s HUP $(docker compose --env-file .env -f deploy/docker-compose.yaml ps -q proxy)
 # 或（需 admin：PROXY_ADMIN_TOKEN 或 web admin 会话）
 curl -X POST -H "Authorization: Bearer $TOKEN" http://127.0.0.1:5001/-/reload
 ```

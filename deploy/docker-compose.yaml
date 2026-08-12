@@ -1,8 +1,12 @@
 # Production-oriented compose: proxy (+ optional Caddy edge).
-# Usage (from repo root):
+# Usage (from repo root — .env lives at repo root, not under deploy/):
 #   cp .env.example .env && edit PROXY_ADMIN_TOKEN / PROXY_WEB_PASSWORD
 #   cp configs/config.docker.yaml configs/config.yaml
-#   docker compose -f deploy/docker-compose.yaml up -d --build
+#   docker compose --env-file .env -f deploy/docker-compose.yaml up -d --build
+#
+# Why --env-file .env:
+#   Compose defaults project dir to the compose file's directory (deploy/),
+#   so it would look for deploy/.env. Pass root .env explicitly for ${VAR} interpolation.
 #
 # Ports:
 #   - Data plane published on host :5000 (not 80/443 — often taken by other web/proxy software)

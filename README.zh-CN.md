@@ -47,7 +47,7 @@ cp .env.example .env
 cp configs/config.docker.yaml configs/config.yaml
 # 将 hosts 中的 reg.example.com 改成你的真实域名
 
-docker compose -f deploy/docker-compose.yaml up -d --build
+docker compose --env-file .env -f deploy/docker-compose.yaml up -d --build
 ```
 
 | 项 | 说明 |
