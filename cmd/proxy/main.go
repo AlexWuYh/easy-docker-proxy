@@ -131,7 +131,7 @@ func main() {
 		Proxy:      p,
 		ConfigPath: *configPath,
 		ReloadFunc: reload,
-		Stats:      &statsapi.API{Store: st},
+		Stats:      statsapi.New(st),
 		Store:      st,
 	}
 	if cfg.Metrics.Enabled {

@@ -37,11 +37,11 @@ type RegistryConfig struct {
 	// PathPrefixes: repository path prefixes for single-domain hybrid mode, e.g. "ghcr.io", "docker.io".
 	// Client: docker pull reg.example.com/ghcr.io/owner/app:tag → repo "ghcr.io/owner/app".
 	// Longest prefix wins. Stripped before talking to upstream.
-	PathPrefixes []string `yaml:"path_prefixes" json:"path_prefixes"`
-	Upstream     string   `yaml:"upstream" json:"upstream"`
-	Auth         AuthConfig `yaml:"auth" json:"auth"`
-	InsecureSkipVerify bool `yaml:"insecure_skip_verify" json:"insecure_skip_verify"`
-	TokenCacheTTL      int  `yaml:"token_cache_ttl" json:"token_cache_ttl"`
+	PathPrefixes       []string   `yaml:"path_prefixes" json:"path_prefixes"`
+	Upstream           string     `yaml:"upstream" json:"upstream"`
+	Auth               AuthConfig `yaml:"auth" json:"auth"`
+	InsecureSkipVerify bool       `yaml:"insecure_skip_verify" json:"insecure_skip_verify"`
+	TokenCacheTTL      int        `yaml:"token_cache_ttl" json:"token_cache_ttl"`
 	// Enabled: nil means enabled (omit field in hand-written configs).
 	Enabled *bool `yaml:"enabled" json:"enabled"`
 }
@@ -138,18 +138,18 @@ func (a UpstreamAllowlist) IsEnabled() bool {
 
 // Config is the top-level configuration root.
 type Config struct {
-	Server             ServerConfig       `yaml:"server" json:"server"`
-	Default            string             `yaml:"default" json:"default"`
-	LogLevel           string             `yaml:"log_level" json:"log_level"`
-	TrustedProxies     []string           `yaml:"trusted_proxies" json:"trusted_proxies"`
-	AccessControl      AccessControl      `yaml:"access_control" json:"access_control"`
-	RateLimit          RateLimitConfig    `yaml:"rate_limit" json:"rate_limit"`
-	Storage            StorageConfig      `yaml:"storage" json:"storage"`
-	Admin              AdminConfig        `yaml:"admin" json:"admin"`
-	Metrics            MetricsConfig      `yaml:"metrics" json:"metrics"`
-	PullAuth           PullAuthConfig     `yaml:"pull_auth" json:"pull_auth"`
-	UpstreamAllowlist  UpstreamAllowlist  `yaml:"upstream_allowlist" json:"upstream_allowlist"`
-	Registries         []RegistryConfig   `yaml:"registries" json:"registries"`
+	Server            ServerConfig      `yaml:"server" json:"server"`
+	Default           string            `yaml:"default" json:"default"`
+	LogLevel          string            `yaml:"log_level" json:"log_level"`
+	TrustedProxies    []string          `yaml:"trusted_proxies" json:"trusted_proxies"`
+	AccessControl     AccessControl     `yaml:"access_control" json:"access_control"`
+	RateLimit         RateLimitConfig   `yaml:"rate_limit" json:"rate_limit"`
+	Storage           StorageConfig     `yaml:"storage" json:"storage"`
+	Admin             AdminConfig       `yaml:"admin" json:"admin"`
+	Metrics           MetricsConfig     `yaml:"metrics" json:"metrics"`
+	PullAuth          PullAuthConfig    `yaml:"pull_auth" json:"pull_auth"`
+	UpstreamAllowlist UpstreamAllowlist `yaml:"upstream_allowlist" json:"upstream_allowlist"`
+	Registries        []RegistryConfig  `yaml:"registries" json:"registries"`
 
 	// AllowInsecureUpstream permits http:// upstreams (dev only). Set via validate option.
 	AllowInsecureUpstream bool `yaml:"-" json:"-"`
@@ -159,6 +159,7 @@ type Config struct {
 var DefaultUpstreamHosts = []string{
 	"registry-1.docker.io",
 	"registry.docker.io",
+	"auth.docker.io",
 	"ghcr.io",
 	"gcr.io",
 	"k8s.gcr.io",
@@ -217,12 +218,7 @@ func Normalize(cfg *Config) {
 	if cfg.LogLevel == "" {
 		cfg.LogLevel = "normal"
 	}
-	switch cfg.AccessControl.Mode {
-	case "", ACLModeOff, ACLModeWhitelist, ACLModeBlacklist:
-		if cfg.AccessControl.Mode == "" {
-			cfg.AccessControl.Mode = ACLModeOff
-		}
-	default:
+	if cfg.AccessControl.Mode == "" {
 		cfg.AccessControl.Mode = ACLModeOff
 	}
 	if cfg.RateLimit.PerIPRPS <= 0 {
@@ -248,12 +244,7 @@ func Normalize(cfg *Config) {
 	}
 	// Metrics default off in Normalize only when zero — example enables explicitly.
 	// Leave Metrics.Enabled as configured (default false).
-	switch cfg.PullAuth.Mode {
-	case "", PullAuthOff, PullAuthOptional, PullAuthRequired:
-		if cfg.PullAuth.Mode == "" {
-			cfg.PullAuth.Mode = PullAuthOff
-		}
-	default:
+	if cfg.PullAuth.Mode == "" {
 		cfg.PullAuth.Mode = PullAuthOff
 	}
 	if cfg.PullAuth.Realm == "" {
@@ -409,6 +400,38 @@ func validateUpstreamHost(cfg *Config, host string) error {
 	return fmt.Errorf("upstream host %q not in upstream_allowlist (SSRF protection); add it or set upstream_allowlist.enabled: false", host)
 }
 
+// CheckTokenRealm validates a WWW-Authenticate realm URL before the proxy fetches it.
+// Same scheme/allowlist rules as registries[].upstream; the registry's own upstream
+// host is always permitted (token endpoints are often on a sibling hostname).
+func CheckTokenRealm(cfg *Config, realm, upstreamURL string) error {
+	u, err := url.Parse(realm)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("token realm is not a valid URL")
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		// ok
+	case "http":
+		if cfg == nil || !cfg.AllowInsecureUpstream {
+			return fmt.Errorf("token realm must use https")
+		}
+	default:
+		return fmt.Errorf("token realm has unsupported scheme %q", u.Scheme)
+	}
+	host := strings.ToLower(strings.TrimSpace(u.Hostname()))
+	if host == "" {
+		return fmt.Errorf("token realm missing host")
+	}
+	if upstreamURL != "" {
+		if uu, err := url.Parse(upstreamURL); err == nil {
+			if strings.EqualFold(strings.TrimSpace(uu.Hostname()), host) {
+				return nil
+			}
+		}
+	}
+	return validateUpstreamHost(cfg, host)
+}
+
 func validateAccessControl(ac *AccessControl) error {
 	switch ac.Mode {
 	case "", ACLModeOff, ACLModeWhitelist, ACLModeBlacklist:
@@ -494,6 +517,7 @@ func Clone(cfg *Config) *Config {
 			cp.Registries[i].Enabled = &v
 		}
 		cp.Registries[i].Hosts = append([]string(nil), cfg.Registries[i].Hosts...)
+		cp.Registries[i].PathPrefixes = append([]string(nil), cfg.Registries[i].PathPrefixes...)
 	}
 	return &cp
 }

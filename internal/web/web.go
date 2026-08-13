@@ -58,6 +58,9 @@ func Handler() http.Handler {
 		w.Header().Set("Content-Type", ctype)
 		// Always no-store for console assets so login/theme fixes are not stuck on old JS/CSS.
 		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(data)
 	})

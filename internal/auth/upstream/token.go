@@ -2,6 +2,7 @@
 package upstream
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,10 +15,14 @@ import (
 	"github.com/alex_wuyh/easy-docker-proxy/internal/config"
 )
 
-// Cache stores bearer tokens keyed by registry|realm|service|scope.
+const tokenFetchTimeout = 15 * time.Second
+
+// Cache stores bearer tokens keyed by registry|realm|service|scope,
+// plus a last-known token per registry|scope for the first hop (avoid a 401 RTT).
 type Cache struct {
 	mu    sync.Mutex
 	items map[string]entry
+	last  map[string]entry // regName|scope
 }
 
 type entry struct {
@@ -27,7 +32,7 @@ type entry struct {
 
 // NewCache creates an empty token cache.
 func NewCache() *Cache {
-	return &Cache{items: make(map[string]entry)}
+	return &Cache{items: make(map[string]entry), last: make(map[string]entry)}
 }
 
 // Clear drops all cached tokens (call on config reload).
@@ -37,14 +42,65 @@ func (c *Cache) Clear() {
 	}
 	c.mu.Lock()
 	c.items = make(map[string]entry)
+	c.last = make(map[string]entry)
 	c.mu.Unlock()
+}
+
+func scopeIndexKey(regName, scope string) string {
+	return regName + "|" + scope
+}
+
+// Peek returns a still-valid token previously fetched for this registry and scope.
+// Realm is unknown until a 401; the last successful token for the scope is reused.
+func (c *Cache) Peek(regName, scope string) string {
+	if c == nil {
+		return ""
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.last[scopeIndexKey(regName, scope)]
+	if !ok || !time.Now().Before(e.expiresAt) {
+		return ""
+	}
+	return e.token
+}
+
+// InvalidateScope drops cached tokens for one registry+scope (call after a 401 with a peeked token).
+func (c *Cache) InvalidateScope(regName, scope string) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.last, scopeIndexKey(regName, scope))
+	suffix := "|" + scope
+	prefix := regName + "|"
+	for k := range c.items {
+		if strings.HasPrefix(k, prefix) && strings.HasSuffix(k, suffix) {
+			delete(c.items, k)
+		}
+	}
 }
 
 // GetToken fetches (and caches) a bearer token from the auth realm.
 // earlyExpireSeconds is subtracted from TTL (design: 60s; reference uses 30s).
-func (c *Cache) GetToken(client *http.Client, realm, service, scope string, reg *config.RegistryConfig) (string, error) {
+// The realm URL (and redirects) must pass config.CheckTokenRealm.
+func (c *Cache) GetToken(ctx context.Context, client *http.Client, realm, service, scope string, reg *config.RegistryConfig, cfg *config.Config) (string, error) {
 	if c == nil {
 		c = NewCache()
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	upstream := ""
+	if reg != nil {
+		upstream = reg.Upstream
+	}
+	if err := config.CheckTokenRealm(cfg, realm, upstream); err != nil {
+		return "", err
+	}
+	if reg == nil {
+		return "", fmt.Errorf("missing registry")
 	}
 	key := reg.Name + "|" + realm + "|" + service + "|" + scope
 
@@ -69,7 +125,7 @@ func (c *Cache) GetToken(client *http.Client, realm, service, scope string, reg 
 	}
 	u.RawQuery = q.Encode()
 
-	req, err := http.NewRequest(http.MethodGet, u.String(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return "", err
 	}
@@ -77,7 +133,8 @@ func (c *Cache) GetToken(client *http.Client, realm, service, scope string, reg 
 		req.SetBasicAuth(reg.Auth.Username, reg.Auth.Password)
 	}
 
-	resp, err := client.Do(req)
+	tokenClient := tokenHTTPClient(client, cfg, upstream)
+	resp, err := tokenClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -120,9 +177,31 @@ func (c *Cache) GetToken(client *http.Client, realm, service, scope string, reg 
 	}
 	expiresAt := time.Now().Add(time.Duration(ttl-skew) * time.Second)
 	c.mu.Lock()
-	c.items[key] = entry{token: tok, expiresAt: expiresAt}
+	ent := entry{token: tok, expiresAt: expiresAt}
+	c.items[key] = ent
+	c.last[scopeIndexKey(reg.Name, scope)] = ent
 	c.mu.Unlock()
 	return tok, nil
+}
+
+func tokenHTTPClient(base *http.Client, cfg *config.Config, upstream string) *http.Client {
+	var transport http.RoundTripper
+	if base != nil {
+		transport = base.Transport
+	}
+	return &http.Client{
+		Timeout:   tokenFetchTimeout,
+		Transport: transport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 3 {
+				return fmt.Errorf("token realm: too many redirects")
+			}
+			if req.URL == nil {
+				return fmt.Errorf("token realm: redirect missing URL")
+			}
+			return config.CheckTokenRealm(cfg, req.URL.String(), upstream)
+		},
+	}
 }
 
 // ParseBearerChallenge parses WWW-Authenticate: Bearer realm="...",service="...",scope="..."

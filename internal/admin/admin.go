@@ -43,7 +43,7 @@ func NewMux(h *Handler) http.Handler {
 	mux.Handle("/stats", statsUI)
 	mux.Handle("/stats/", statsUI)
 
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return withSecurityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		// Public probes
 		if path == "/healthz" || path == "/-/healthz" {
@@ -72,6 +72,20 @@ func NewMux(h *Handler) http.Handler {
 			r = statsapi.WithUser(r, user)
 		}
 		mux.ServeHTTP(w, r)
+	}))
+}
+
+// withSecurityHeaders applies browser hardening on the admin/stats plane.
+// script-src allows 'unsafe-inline' because console pages still use inline scripts;
+// Chart.js is served from /stats/js/ (same origin), not a CDN.
+func withSecurityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+		next.ServeHTTP(w, r)
 	})
 }
 

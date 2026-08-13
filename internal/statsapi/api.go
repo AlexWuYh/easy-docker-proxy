@@ -5,16 +5,35 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"github.com/alex_wuyh/easy-docker-proxy/internal/config"
+	"github.com/alex_wuyh/easy-docker-proxy/internal/ratelimit"
 	"github.com/alex_wuyh/easy-docker-proxy/internal/store"
 )
+
+const loginBodyLimit = 2048
 
 // API serves /api/v1/* endpoints.
 type API struct {
 	Store *store.Store
+	// loginLim rate-limits POST /api/v1/auth/login by RemoteAddr (not XFF).
+	loginLim *ratelimit.Limiter
+}
+
+// New builds an API with a default login limiter.
+func New(st *store.Store) *API {
+	return &API{
+		Store: st,
+		loginLim: ratelimit.New(config.RateLimitConfig{
+			Enabled:    true,
+			PerIPRPS:   1,
+			PerIPBurst: 8,
+		}),
+	}
 }
 
 type ctxKey int
@@ -67,11 +86,23 @@ func bearerToken(r *http.Request) string {
 	return ""
 }
 
+func loginPeerIP(r *http.Request) string {
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
+}
+
 func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	if a != nil && a.loginLim != nil && !a.loginLim.Allow(loginPeerIP(r)) {
+		writeErr(w, http.StatusTooManyRequests, "too many login attempts")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, loginBodyLimit)
 	var body struct {
 		Username string `json:"username"`
 		Password string `json:"password"`

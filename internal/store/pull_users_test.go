@@ -43,4 +43,21 @@ func TestPullUsersAuth(t *testing.T) {
 	if _, err := st.AuthenticatePull(context.Background(), "puller", "password1"); err == nil {
 		t.Fatal("disabled user should fail")
 	}
+
+	if err := st.SetPullUserEnabled(context.Background(), list[0].ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AuthenticatePull(context.Background(), "puller", "password1"); err != nil {
+		t.Fatal(err)
+	}
+	// Cached success must not survive a password change.
+	if err := st.SetPullUserPassword(context.Background(), list[0].ID, "password2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AuthenticatePull(context.Background(), "puller", "password1"); err == nil {
+		t.Fatal("old password must fail after rotation")
+	}
+	if _, err := st.AuthenticatePull(context.Background(), "puller", "password2"); err != nil {
+		t.Fatal(err)
+	}
 }

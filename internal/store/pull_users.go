@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -10,6 +12,15 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 )
+
+// pullAuthCacheTTL skips bcrypt on repeated docker-login for the same user+password.
+// Mutations (password / enabled / delete) wipe the cache.
+const pullAuthCacheTTL = 30 * time.Second
+
+type pullAuthCacheEntry struct {
+	passSHA   string
+	expiresAt time.Time
+}
 
 // PullUser is a docker-login account for the registry data plane (not web console).
 type PullUser struct {
@@ -87,10 +98,55 @@ VALUES (?, ?, ?, ?, ?)`, username, string(hash), en, now, now)
 	return &PullUser{ID: id, Username: username, Enabled: enabled, CreatedAt: now, UpdatedAt: now}, nil
 }
 
+func pullPasswordSHA(password string) string {
+	sum := sha256.Sum256([]byte(password))
+	return hex.EncodeToString(sum[:])
+}
+
+func (s *Store) pullAuthCacheGet(username, password string) bool {
+	if s == nil {
+		return false
+	}
+	s.pullAuthMu.Lock()
+	defer s.pullAuthMu.Unlock()
+	e, ok := s.pullAuthCache[username]
+	if !ok || !time.Now().Before(e.expiresAt) {
+		return false
+	}
+	return e.passSHA == pullPasswordSHA(password)
+}
+
+func (s *Store) pullAuthCachePut(username, password string) {
+	if s == nil {
+		return
+	}
+	s.pullAuthMu.Lock()
+	if s.pullAuthCache == nil {
+		s.pullAuthCache = make(map[string]pullAuthCacheEntry)
+	}
+	s.pullAuthCache[username] = pullAuthCacheEntry{
+		passSHA:   pullPasswordSHA(password),
+		expiresAt: time.Now().Add(pullAuthCacheTTL),
+	}
+	s.pullAuthMu.Unlock()
+}
+
+func (s *Store) invalidatePullAuthCache() {
+	if s == nil {
+		return
+	}
+	s.pullAuthMu.Lock()
+	s.pullAuthCache = make(map[string]pullAuthCacheEntry)
+	s.pullAuthMu.Unlock()
+}
+
 // AuthenticatePull verifies Basic credentials for the data plane.
 // Returns username on success.
 func (s *Store) AuthenticatePull(ctx context.Context, username, password string) (string, error) {
 	username = strings.TrimSpace(username)
+	if username != "" && s.pullAuthCacheGet(username, password) {
+		return username, nil
+	}
 	var hash string
 	var enabled int
 	err := s.db.QueryRowContext(ctx, `
@@ -107,6 +163,7 @@ SELECT password_hash, enabled FROM pull_users WHERE username = ?`, username).Sca
 	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
 		return "", ErrPullAuthInvalid
 	}
+	s.pullAuthCachePut(username, password)
 	return username, nil
 }
 
@@ -153,6 +210,7 @@ UPDATE pull_users SET password_hash = ?, updated_at = ? WHERE id = ?`, string(ha
 	if n == 0 {
 		return ErrPullUserNotFound
 	}
+	s.invalidatePullAuthCache()
 	return nil
 }
 
@@ -172,6 +230,7 @@ UPDATE pull_users SET enabled = ?, updated_at = ? WHERE id = ?`, en, now, id)
 	if n == 0 {
 		return ErrPullUserNotFound
 	}
+	s.invalidatePullAuthCache()
 	return nil
 }
 
@@ -185,5 +244,6 @@ func (s *Store) DeletePullUser(ctx context.Context, id int64) error {
 	if n == 0 {
 		return ErrPullUserNotFound
 	}
+	s.invalidatePullAuthCache()
 	return nil
 }

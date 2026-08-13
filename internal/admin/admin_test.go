@@ -58,6 +58,27 @@ func TestHealthzOpen(t *testing.T) {
 	}
 }
 
+func TestSecurityHeaders(t *testing.T) {
+	h := NewMux(&Handler{Proxy: testProxy(t), Store: testStore(t)})
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if rr.Header().Get("X-Frame-Options") != "DENY" {
+		t.Fatalf("X-Frame-Options %q", rr.Header().Get("X-Frame-Options"))
+	}
+	if rr.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("nosniff missing")
+	}
+	csp := rr.Header().Get("Content-Security-Policy")
+	if !strings.Contains(csp, "frame-ancestors 'none'") || !strings.Contains(csp, "default-src 'self'") {
+		t.Fatalf("CSP %q", csp)
+	}
+	rr2 := httptest.NewRecorder()
+	h.ServeHTTP(rr2, httptest.NewRequest(http.MethodGet, "/stats/login.html", nil))
+	if !strings.Contains(rr2.Header().Get("Content-Security-Policy"), "default-src 'self'") {
+		t.Fatalf("login CSP %q", rr2.Header().Get("Content-Security-Policy"))
+	}
+}
+
 func TestSessionAndLogin(t *testing.T) {
 	st := testStore(t)
 	if _, err := st.BootstrapAdmin(context.Background(), "admin", "password1"); err != nil {
@@ -256,9 +277,9 @@ func TestConfigReloadAdminOnly(t *testing.T) {
 	t.Setenv("PROXY_ADMIN_TOKEN", "ops-static-token")
 	// rebuild mux so AdminToken() sees env (config reads env at request time)
 	h2 := NewMux(&Handler{
-		Proxy: testProxy(t),
-		Store: st,
-		Stats: &statsapi.API{Store: st},
+		Proxy:      testProxy(t),
+		Store:      st,
+		Stats:      &statsapi.API{Store: st},
 		ReloadFunc: func() error { return nil },
 	})
 	reqOps := httptest.NewRequest(http.MethodGet, "/-/config", nil)

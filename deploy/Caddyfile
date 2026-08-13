@@ -15,9 +15,9 @@
 # trusted_proxies in proxy config must include the compose network CIDRs.
 
 # Example: corporate mirror hostname used as registry-mirrors target
-# (clients: "registry-mirrors": ["https://registry.example.com"]).
-# Replace example.com and ensure DNS + hosts[] / default match.
-registry.example.com {
+# (clients: "registry-mirrors": ["https://reg.example.com"]).
+# Replace with your real hostname; must match configs/*.yaml hosts[] / default.
+reg.example.com {
 	reverse_proxy proxy:5000 {
 		header_up Host {host}
 		header_up X-Forwarded-Host {host}

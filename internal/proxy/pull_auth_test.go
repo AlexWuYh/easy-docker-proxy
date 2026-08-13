@@ -113,4 +113,15 @@ func TestPullAuthOptional(t *testing.T) {
 	if rr2.Code != http.StatusUnauthorized {
 		t.Fatalf("optional bad creds: %d", rr2.Code)
 	}
+
+	// non-Basic Authorization is not treated as anonymous
+	req3 := httptest.NewRequest(http.MethodGet, "http://hub.example.com/v2/", nil)
+	req3.Host = "hub.example.com"
+	req3.RemoteAddr = "127.0.0.1:1"
+	req3.Header.Set("Authorization", "Bearer not-a-docker-login")
+	rr3 := httptest.NewRecorder()
+	p.ServeHTTP(rr3, req3)
+	if rr3.Code != http.StatusUnauthorized {
+		t.Fatalf("optional Bearer must 401: %d", rr3.Code)
+	}
 }

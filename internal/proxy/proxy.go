@@ -361,13 +361,18 @@ func (p *Proxy) checkPullAuth(w http.ResponseWriter, r *http.Request) (string, b
 		return "", true
 	}
 
+	authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
 	user, pass, hasBasic := parseBasicAuth(r)
 	if !hasBasic {
+		if authHeader != "" {
+			// optional/required: any Authorization must be valid Basic (not Bearer / garbage).
+			writePullAuthChallenge(w, realm)
+			return "", false
+		}
 		if mode == config.PullAuthRequired {
 			writePullAuthChallenge(w, realm)
 			return "", false
 		}
-		// optional: anonymous OK
 		return "", true
 	}
 
@@ -445,6 +450,9 @@ func (p *Proxy) maybeLog(r *http.Request, reg *config.RegistryConfig, start time
 }
 
 // ClientIP extracts the client address using trusted_proxies for XFF.
+// Untrusted peers cannot set X-Forwarded-For / X-Real-IP.
+// When the peer is trusted, XFF is walked right-to-left and trusted hops
+// are skipped so a client-supplied left-most address cannot spoof ACL/limits.
 // Exported for tests.
 func (p *Proxy) ClientIP(r *http.Request) string {
 	remote := remoteIP(r)
@@ -452,21 +460,48 @@ func (p *Proxy) ClientIP(r *http.Request) string {
 	trusted := p.trusted
 	p.mu.RUnlock()
 
-	if remote != "" && ipInNets(remote, trusted) {
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			// Left-most is original client when chain is appended by proxies.
-			parts := strings.Split(xff, ",")
-			if len(parts) > 0 {
-				if ip := strings.TrimSpace(parts[0]); ip != "" {
-					return ip
-				}
-			}
+	if remote == "" || !ipInNets(remote, trusted) {
+		return remote
+	}
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if ip := clientIPFromXFF(xff, trusted); ip != "" {
+			return ip
 		}
-		if xri := strings.TrimSpace(r.Header.Get("X-Real-IP")); xri != "" {
+	}
+	if xri := strings.TrimSpace(r.Header.Get("X-Real-IP")); xri != "" {
+		if net.ParseIP(xri) != nil {
 			return xri
 		}
 	}
 	return remote
+}
+
+// clientIPFromXFF walks X-Forwarded-For from the right (closest proxy).
+// Trusted hops are skipped; the first untrusted address is the client.
+// If every hop is trusted, the left-most valid IP is returned.
+func clientIPFromXFF(xff string, trusted []*net.IPNet) string {
+	parts := strings.Split(xff, ",")
+	var firstValid string
+	for i := len(parts) - 1; i >= 0; i-- {
+		ip := strings.TrimSpace(parts[i])
+		if net.ParseIP(ip) == nil {
+			continue
+		}
+		if firstValid == "" {
+			firstValid = ip
+		}
+		if !ipInNets(ip, trusted) {
+			return ip
+		}
+	}
+	// All hops trusted: left-most valid IP (original client).
+	for _, raw := range parts {
+		ip := strings.TrimSpace(raw)
+		if net.ParseIP(ip) != nil {
+			return ip
+		}
+	}
+	return firstValid
 }
 
 func (p *Proxy) isTrustedPeer(r *http.Request) bool {
@@ -519,7 +554,11 @@ func (p *Proxy) proxyRequest(w http.ResponseWriter, r *http.Request, hit routeHi
 		scope = "repository:" + repo + ":pull"
 	}
 
-	resp, err := p.doUpstream(client, r, target.String(), "", reg)
+	token := ""
+	if reg.Auth.Type != config.AuthAnonymous {
+		token = p.tokens.Peek(reg.Name, scope)
+	}
+	resp, err := p.doUpstream(client, r, target.String(), token, reg)
 	if err != nil {
 		log.Printf("[ERR] upstream %s: %v", reg.Name, err)
 		http.Error(w, "upstream error", http.StatusBadGateway)
@@ -531,11 +570,14 @@ func (p *Proxy) proxyRequest(w http.ResponseWriter, r *http.Request, hit routeHi
 		challenge := resp.Header.Get("WWW-Authenticate")
 		realm, service, _ := upstream.ParseBearerChallenge(challenge)
 		resp.Body.Close()
+		if token != "" {
+			p.tokens.InvalidateScope(reg.Name, scope)
+		}
 		if realm == "" {
 			http.Error(w, "unauthorized upstream", http.StatusBadGateway)
 			return http.StatusBadGateway, 0, "unauthorized upstream"
 		}
-		token, terr := p.tokens.GetToken(client, realm, service, scope, reg)
+		token, terr := p.tokens.GetToken(r.Context(), client, realm, service, scope, reg, p.Config())
 		if terr != nil {
 			log.Printf("[ERR] token %s scope=%q: %v", reg.Name, scope, terr)
 			http.Error(w, "token error", http.StatusBadGateway)
@@ -699,8 +741,14 @@ func (p *Proxy) getClient(reg *config.RegistryConfig) *http.Client {
 	}
 	transport := &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
-		// Generous for large layers; timeouts controlled by server write_timeout=0.
-		IdleConnTimeout: 90 * time.Second,
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		TLSHandshakeTimeout: 10 * time.Second,
+		// Cap waiting for headers; body stays unlimited for large layers.
+		ResponseHeaderTimeout: 30 * time.Second,
+		IdleConnTimeout:       90 * time.Second,
 	}
 	if reg.InsecureSkipVerify {
 		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // explicit config opt-in

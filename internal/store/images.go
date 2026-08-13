@@ -22,12 +22,12 @@ type ImageSummary struct {
 
 // ImageTagStat is one tag/digest under a repository.
 type ImageTagStat struct {
-	Reference  string `json:"reference"`
-	Pulls      int64  `json:"pulls"`
-	BytesTotal int64  `json:"bytes_total"`
-	Errors     int64  `json:"errors"`
-	LastPullTS int64  `json:"last_pull_ts"`
-	FirstPullTS int64 `json:"first_pull_ts"`
+	Reference   string `json:"reference"`
+	Pulls       int64  `json:"pulls"`
+	BytesTotal  int64  `json:"bytes_total"`
+	Errors      int64  `json:"errors"`
+	LastPullTS  int64  `json:"last_pull_ts"`
+	FirstPullTS int64  `json:"first_pull_ts"`
 }
 
 // ListImages returns repositories merged by registry+name, ordered by last pull.
@@ -45,42 +45,47 @@ func (s *Store) ListImages(ctx context.Context, q, registry string, limit, offse
 	q = strings.TrimSpace(q)
 	registry = strings.TrimSpace(registry)
 
-	where := `WHERE event_type = 'manifest'`
+	// List repos that have at least one manifest (same as before). Bytes include
+	// blobs so the image list matches dashboard / stats_daily traffic.
+	repoWhere := `WHERE event_type = 'manifest'`
 	args := []any{}
 	if registry != "" {
-		where += ` AND registry = ?`
+		repoWhere += ` AND registry = ?`
 		args = append(args, registry)
 	}
 	if q != "" {
-		where += ` AND (repository LIKE ? OR registry LIKE ? OR COALESCE(reference,'') LIKE ?)`
+		repoWhere += ` AND (repository LIKE ? OR registry LIKE ? OR COALESCE(reference,'') LIKE ?)`
 		like := "%" + q + "%"
 		args = append(args, like, like, like)
 	}
 
 	var total int64
 	countSQL := `SELECT COUNT(*) FROM (
-SELECT registry, repository FROM pull_events ` + where + ` GROUP BY registry, repository)`
+SELECT registry, repository FROM pull_events ` + repoWhere + ` GROUP BY registry, repository)`
 	if err := s.db.QueryRowContext(ctx, countSQL, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
 	sqlq := `
 SELECT
-  registry,
-  repository,
-  SUM(CASE WHEN status >= 200 AND status < 300 THEN 1 ELSE 0 END) AS pulls,
-  COALESCE(SUM(bytes), 0) AS bytes_total,
-  SUM(CASE WHEN status >= 400 OR (error IS NOT NULL AND error != '') THEN 1 ELSE 0 END) AS errors,
-  COUNT(DISTINCT CASE WHEN reference IS NOT NULL AND reference != '' THEN reference END) AS tag_count,
-  MAX(ts) AS last_ts,
-  MIN(ts) AS first_ts,
+  e.registry,
+  e.repository,
+  SUM(CASE WHEN e.event_type = 'manifest' AND UPPER(COALESCE(e.method, '')) IN ('', 'GET')
+            AND e.status >= 200 AND e.status < 300 THEN 1 ELSE 0 END) AS pulls,
+  COALESCE(SUM(e.bytes), 0) AS bytes_total,
+  SUM(CASE WHEN e.status >= 400 OR (e.error IS NOT NULL AND e.error != '') THEN 1 ELSE 0 END) AS errors,
+  COUNT(DISTINCT CASE WHEN e.event_type = 'manifest' AND e.reference IS NOT NULL AND e.reference != '' THEN e.reference END) AS tag_count,
+  MAX(CASE WHEN e.event_type = 'manifest' THEN e.ts END) AS last_ts,
+  MIN(CASE WHEN e.event_type = 'manifest' THEN e.ts END) AS first_ts,
   (SELECT pe2.reference FROM pull_events pe2
-    WHERE pe2.registry = pull_events.registry AND pe2.repository = pull_events.repository
+    WHERE pe2.registry = e.registry AND pe2.repository = e.repository
       AND pe2.event_type = 'manifest'
     ORDER BY pe2.ts DESC LIMIT 1) AS last_ref
-FROM pull_events
-` + where + `
-GROUP BY registry, repository
+FROM pull_events e
+INNER JOIN (
+  SELECT registry, repository FROM pull_events ` + repoWhere + ` GROUP BY registry, repository
+) repos ON repos.registry = e.registry AND repos.repository = e.repository
+GROUP BY e.registry, e.repository
 ORDER BY last_ts DESC
 LIMIT ? OFFSET ?`
 	args2 := append(append([]any{}, args...), limit, offset)
@@ -139,10 +144,13 @@ func (s *Store) ListImageTags(ctx context.Context, registry, repository string) 
 	if registry == "" || repository == "" {
 		return nil, fmt.Errorf("registry and repository required")
 	}
+	// Tag rows stay on manifests (blobs use digest refs, not tags).
+	// Repo-level traffic (including blobs) is ListImages / stats_daily.
 	rows, err := s.db.QueryContext(ctx, `
 SELECT
   COALESCE(reference, '') AS reference,
-  SUM(CASE WHEN status >= 200 AND status < 300 THEN 1 ELSE 0 END) AS pulls,
+  SUM(CASE WHEN UPPER(COALESCE(method, '')) IN ('', 'GET')
+            AND status >= 200 AND status < 300 THEN 1 ELSE 0 END) AS pulls,
   COALESCE(SUM(bytes), 0) AS bytes_total,
   SUM(CASE WHEN status >= 400 OR (error IS NOT NULL AND error != '') THEN 1 ELSE 0 END) AS errors,
   MAX(ts) AS last_ts,
@@ -175,7 +183,7 @@ func (s *Store) ImageAnalytics(ctx context.Context, registry, repository, rangeS
 	if err != nil {
 		return nil, err
 	}
-	// Aggregate from stats_daily when available, else from events.
+	// stats_daily already includes blob bytes (same definition as dashboard traffic).
 	rows, err := s.db.QueryContext(ctx, `
 SELECT day, pulls, bytes_total, errors FROM stats_daily
 WHERE registry = ? AND repository = ? AND day >= ? AND day <= ?

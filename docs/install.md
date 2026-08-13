@@ -168,7 +168,7 @@ reg.example.com {
 | Host | 保留客户端 Host，与 `hosts` / 默认路由一致 |
 | 超时 | 大层传输建议 `read_timeout 0` |
 | 证书 | 只给**你的入口域名**配证即可（Caddy 自动 HTTPS 或自备证书） |
-| `trusted_proxies` | 同机需含 `127.0.0.1/32`（示例配置已有） |
+| `trusted_proxies` | 只写真实边缘。同机 Caddy 用 `127.0.0.1/32`（示例默认）；compose 网内 Caddy 再加该桥网段。不要写整个 RFC1918 |
 
 重载 Caddy 后，客户端 mirrors 使用 `https://<你的域名>`。
 
@@ -311,10 +311,10 @@ mirrors 场景请保持 `dockerhub`；设为 `""` 则未匹配前缀且未命中
 | 段 | 说明 |
 |----|------|
 | `access_control` | `off` / `whitelist` / `blacklist`；公网建议 whitelist |
-| `trusted_proxies` | 仅信任的反代网段才解析 XFF / X-Forwarded-Host |
+| `trusted_proxies` | 仅真实反代网段才解析 XFF（从右往左）/ X-Forwarded-Host；勿填整个 RFC1918 |
 | `upstream_allowlist` | 限制可配置的上游主机名（防 SSRF） |
 | `rate_limit` | 按客户端 IP 限流 |
-| `pull_auth` | 客户端拉本代理是否要 Basic |
+| `pull_auth` | 客户端拉本代理是否要 Basic；optional/required 下非空 Authorization 必须是合法 Basic |
 
 ### 6.5 存储与管理
 

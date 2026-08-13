@@ -20,11 +20,12 @@ server:
 default: dockerhub
 log_level: normal # quiet | normal | debug
 
+# Only the real reverse-proxy hop. Do NOT list RFC1918/docker bridges:
+# published :5000 then looks like 172.17.0.1 and clients can spoof XFF.
 trusted_proxies:
   - "127.0.0.1/32"
-  - "10.0.0.0/8"
-  - "172.16.0.0/12"
-  - "192.168.0.0/16"
+  # compose Caddy on the same user-defined bridge, e.g.:
+  # - "172.18.0.0/16"
 
 access_control:
   mode: off # off | whitelist | blacklist

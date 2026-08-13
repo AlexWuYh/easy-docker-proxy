@@ -2,7 +2,10 @@
 // Writers must never block the proxy hot path. See .ai/01_DESIGN.md §5.
 package record
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // EventType classifies a registry request for analytics.
 type EventType string
@@ -33,9 +36,15 @@ type Event struct {
 	PullUser string
 }
 
-// IsPull reports whether this event counts as a successful image pull (manifest 2xx).
+// IsPull reports whether this event counts as a successful image pull.
+// Only GET (or empty method, for older rows) 2xx manifests count.
+// HEAD probes that Docker issues before GET must not double the pull counter.
 func (e Event) IsPull() bool {
-	return e.EventType == EventManifest && e.Status >= 200 && e.Status < 300
+	if e.EventType != EventManifest || e.Status < 200 || e.Status >= 300 {
+		return false
+	}
+	m := strings.ToUpper(strings.TrimSpace(e.Method))
+	return m == "" || m == "GET"
 }
 
 // IsError reports status>=400 or explicit error text with no success status.

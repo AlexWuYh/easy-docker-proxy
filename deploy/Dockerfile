@@ -18,7 +18,9 @@ COPY --from=build /out/proxy /app/proxy
 # Data plane (admin/stats bind separately; do not publish admin to the public internet)
 EXPOSE 5000
 VOLUME ["/data"]
+# Probe admin /healthz (unauthenticated). Do not use data-plane /v2/ —
+# pull_auth.required and IP whitelist would mark a healthy process unhealthy.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD curl -fsS -o /dev/null http://127.0.0.1:5000/v2/ || exit 1
+  CMD curl -fsS -o /dev/null http://127.0.0.1:5001/healthz || exit 1
 ENTRYPOINT ["/app/proxy"]
 CMD ["-config", "/etc/proxy/config.yaml"]

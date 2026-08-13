@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/alex_wuyh/easy-docker-proxy/internal/config"
@@ -23,6 +24,9 @@ type Store struct {
 	db                     *sql.DB
 	eventRetentionDays     int
 	aggregateRetentionDays int
+
+	pullAuthMu    sync.Mutex
+	pullAuthCache map[string]pullAuthCacheEntry
 }
 
 // Open opens (or creates) the database from storage config.
@@ -77,6 +81,7 @@ func Open(cfg config.StorageConfig) (*Store, error) {
 		db:                     db,
 		eventRetentionDays:     evDays,
 		aggregateRetentionDays: agDays,
+		pullAuthCache:          make(map[string]pullAuthCacheEntry),
 	}, nil
 }
 

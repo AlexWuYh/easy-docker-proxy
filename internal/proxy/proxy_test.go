@@ -134,6 +134,17 @@ func TestClientIPTrustedXFF(t *testing.T) {
 	}
 }
 
+func TestClientIPTrustedXFFSkipsSpoofedLeftmost(t *testing.T) {
+	p := New(testConfig())
+	req := httptest.NewRequest(http.MethodGet, "http://hub.example.com/v2/", nil)
+	req.RemoteAddr = "10.0.0.1:1"
+	// Client-supplied left-most hop must not win; walk from the right.
+	req.Header.Set("X-Forwarded-For", "198.51.100.7, 203.0.113.9")
+	if ip := p.ClientIP(req); ip != "203.0.113.9" {
+		t.Fatalf("got %q", ip)
+	}
+}
+
 func TestClientIPUntrustedIgnoresXFF(t *testing.T) {
 	p := New(testConfig())
 	req := httptest.NewRequest(http.MethodGet, "http://hub.example.com/v2/", nil)
@@ -296,8 +307,8 @@ func TestIsRegistryPath(t *testing.T) {
 		"/v2/library/nginx/blobs/sha256:abc": true,
 		"/v2/library/nginx/tags/list":        true,
 		"/v2/foo/bar/referrers/sha256:x":     true,
-		"/v2/": false, // handled separately
-		"/admin": false,
+		"/v2/":                               false, // handled separately
+		"/admin":                             false,
 	}
 	for path, want := range cases {
 		if got := isRegistryPath(path); got != want {

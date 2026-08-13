@@ -41,7 +41,7 @@ cp configs/config.docker.yaml configs/config.yaml
 
 ```bash
 docker compose --env-file .env -f deploy/docker-compose.yaml up -d --build
-curl -H 'Host: registry-1.docker.io' http://127.0.0.1:5000/v2/
+curl -H 'Host: reg.example.com' http://127.0.0.1:5000/v2/
 ```
 
 ### 3. 客户端：单域名混合模式
@@ -74,7 +74,7 @@ docker compose --env-file .env -f deploy/docker-compose.yaml up -d --build
 curl -sS -o /dev/null -w '%{http_code}\n' -H 'Host: reg.example.com' http://127.0.0.1:5000/v2/
 ```
 
-`trusted_proxies` 含 Caddy 出口（同机保留 `127.0.0.1/32`）。
+`trusted_proxies` 只含真实 Caddy 出口（同机 `127.0.0.1/32`；compose 网内再加该桥，勿写整个 `172.16.0.0/12`）。
 
 完整片段：[caddy.external.example](./caddy.external.example)（站点名改成你的域名）。
 
@@ -152,6 +152,10 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:5001/metrics
 - `X-Forwarded-For` / `X-Real-IP`（客户端 IP）
 - `X-Forwarded-Host`（Host 路由）
 
+XFF 从**右往左**解析：跳过仍受信的跳，取第一个非受信地址。不要把整个 RFC1918 / Docker 网桥写进名单——compose 发布 `:5000` 时容器看到的 peer 经常是 `172.17.0.1`，那样公网客户端就能伪造 XFF 绕过限流和 ACL。
+
+默认示例只含 `127.0.0.1/32`（本机 Caddy）。compose 里的 Caddy 请改成该桥的网段（常见 `172.18.0.0/16`），不要写 `172.16.0.0/12`。
+
 错误配置会导致 IP ACL 失真或 Host 被伪造。
 
 ### upstream_allowlist 说明
@@ -179,4 +183,4 @@ curl -X POST -H "Authorization: Bearer $TOKEN" http://127.0.0.1:5001/-/reload
 
 ## 健康检查
 
-镜像内置 `HEALTHCHECK`：请求容器内 `http://127.0.0.1:5000/v2/`。
+镜像内置 `HEALTHCHECK`：请求容器内 `http://127.0.0.1:5001/healthz`（管理面存活探针，不受 `pull_auth` / ACL 影响）。数据面 `/v2/` 在 `pull_auth.required` 下会 401，不能当探活。
