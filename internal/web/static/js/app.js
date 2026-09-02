@@ -137,6 +137,39 @@
     return true;
   }
 
+  function wireTabs(selector, onActivate) {
+    const tablist = typeof selector === "string" ? document.querySelector(selector) : selector;
+    if (!tablist) return;
+    const tabs = Array.from(tablist.querySelectorAll('[role="tab"]'));
+    if (!tabs.length) return;
+
+    function activate(tab, moveFocus) {
+      tabs.forEach((item) => {
+        const selected = item === tab;
+        item.classList.toggle("active", selected);
+        item.setAttribute("aria-selected", String(selected));
+        item.tabIndex = selected ? 0 : -1;
+      });
+      onActivate(tab);
+      if (moveFocus) tab.focus();
+    }
+
+    tabs.forEach((tab, index) => {
+      tab.addEventListener("click", () => activate(tab, false));
+      tab.addEventListener("keydown", (event) => {
+        let next = -1;
+        if (event.key === "ArrowRight") next = (index + 1) % tabs.length;
+        if (event.key === "ArrowLeft") next = (index - 1 + tabs.length) % tabs.length;
+        if (event.key === "Home") next = 0;
+        if (event.key === "End") next = tabs.length - 1;
+        if (next < 0) return;
+        event.preventDefault();
+        activate(tabs[next], true);
+      });
+    });
+    activate(tabs.find((tab) => tab.getAttribute("aria-selected") === "true") || tabs[0], false);
+  }
+
   function ensureFavicon() {
     if (document.querySelector('link[rel="icon"]')) return;
     const link = document.createElement("link");
@@ -262,6 +295,7 @@
     clearSession,
     getUser,
     requireAuth,
+    wireTabs,
     renderNav,
     renderFooter,
     ensureFavicon,

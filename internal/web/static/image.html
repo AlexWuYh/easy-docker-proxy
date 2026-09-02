@@ -36,16 +36,16 @@
           </select>
         </div>
       </div>
-      <div id="load-error" class="error-banner" hidden></div>
+      <div id="load-error" class="error-banner" role="alert" hidden></div>
 
       <section class="glass panel" id="analysis">
         <div class="panel-head"><h2>拉取趋势（本镜像）</h2></div>
-        <div class="chart-wrap"><canvas id="chart" aria-label="镜像趋势"></canvas></div>
+        <div class="chart-wrap"><canvas id="chart" aria-label="镜像趋势"></canvas></div><p class="chart-summary" id="chart-summary" role="status"></p>
       </section>
 
       <section class="glass panel" style="margin-top:1rem">
         <div class="panel-head"><h2>Tag / Digest 列表</h2></div>
-        <div class="table-wrap" id="tags"></div>
+        <div class="table-wrap" id="tags" aria-live="polite"></div>
       </section>
     </main>
   </div>
@@ -61,8 +61,11 @@
     document.getElementById("subtitle").textContent = registry ? `${registry} / ${repository}` : "缺少参数";
 
     let chart;
+    let loadGeneration = 0;
     async function load() {
+      const generation = ++loadGeneration;
       const err = document.getElementById("load-error");
+      const tagsEl = document.getElementById("tags");
       err.hidden = true;
       if (!registry || !repository) {
         err.hidden = false;
@@ -70,11 +73,14 @@
         return;
       }
       const range = document.getElementById("range").value;
+      tagsEl.setAttribute("aria-busy", "true");
+      tagsEl.innerHTML = '<p class="loading">正在加载 tag…</p>';
       try {
         const [tags, ts] = await Promise.all([
           EDP.api(`/api/v1/images/tags?registry=${encodeURIComponent(registry)}&repository=${encodeURIComponent(repository)}`),
           EDP.api(`/api/v1/images/timeseries?registry=${encodeURIComponent(registry)}&repository=${encodeURIComponent(repository)}&range=${encodeURIComponent(range)}`),
         ]);
+        if (generation !== loadGeneration) return;
         const rows = (tags.items || []).map(t => `<tr>
           <td class="mono">${EDP.esc(t.reference || "(empty)")}</td>
           <td>${t.pulls}</td>
@@ -112,12 +118,19 @@
             },
           });
         }
+        const totalPulls = (ts.points || []).reduce((n, p) => n + (Number(p.pulls) || 0), 0);
+        const totalBytes = (ts.points || []).reduce((n, p) => n + (Number(p.bytes_total) || 0), 0);
+        document.getElementById("chart-summary").textContent = `区间合计：Pulls ${totalPulls}，流量 ${EDP.formatBytes(totalBytes)}`;
         if (location.hash === "#analysis") {
           document.getElementById("analysis").scrollIntoView({ behavior: "smooth" });
         }
       } catch (e) {
+        if (generation !== loadGeneration) return;
         err.hidden = false;
         err.textContent = e.message;
+        tagsEl.innerHTML = '<p class="empty">镜像详情加载失败</p>';
+      } finally {
+        if (generation === loadGeneration) tagsEl.setAttribute("aria-busy", "false");
       }
     }
     document.getElementById("range").addEventListener("change", load);

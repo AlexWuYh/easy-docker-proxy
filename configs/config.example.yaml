@@ -24,8 +24,8 @@ log_level: normal # quiet | normal | debug
 # published :5000 then looks like 172.17.0.1 and clients can spoof XFF.
 trusted_proxies:
   - "127.0.0.1/32"
-  # compose Caddy on the same user-defined bridge, e.g.:
-  # - "172.18.0.0/16"
+  # Bundled compose Caddy uses a single static peer (default 172.30.0.3).
+  # Add that address only when running the compose edge profile.
 
 access_control:
   mode: off # off | whitelist | blacklist
@@ -55,7 +55,6 @@ storage:
 
 admin:
   token_env: PROXY_ADMIN_TOKEN
-  stats_require_auth: true
 
 # ---------------------------------------------------------------------------
 # 上游：path_prefixes = 客户端镜像路径前缀（单域名混合）

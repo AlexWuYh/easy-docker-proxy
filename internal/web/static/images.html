@@ -30,17 +30,18 @@
           <select id="registry" class="input" aria-label="上游筛选" style="min-width:10rem">
             <option value="">全部上游</option>
           </select>
+          <label class="sr-only" for="q">搜索镜像或 tag</label>
           <input class="input" id="q" type="search" placeholder="搜索镜像 / tag" style="min-width:12rem" />
           <button type="button" class="btn btn-primary" id="btn-search">筛选</button>
           <button type="button" class="btn btn-ghost" id="btn-reset">重置</button>
         </div>
       </div>
-      <div id="load-error" class="error-banner" hidden></div>
+      <div id="load-error" class="error-banner" role="alert" hidden></div>
       <section class="glass panel">
         <div class="panel-head">
           <h2>镜像 <span id="total-hint" style="font-weight:400;text-transform:none;letter-spacing:0"></span></h2>
         </div>
-        <div class="table-wrap" id="list"></div>
+        <div class="table-wrap" id="list" aria-live="polite"></div>
         <div class="toolbar" style="margin-top:1rem;justify-content:flex-end">
           <button type="button" class="btn btn-ghost" id="btn-prev">上一页</button>
           <span class="user-chip" id="page-hint">—</span>
@@ -58,6 +59,7 @@
     const limit = 30;
     let total = 0;
     let registriesLoaded = false;
+    let loadGeneration = 0;
 
     function paramsFromURL() {
       const u = new URL(location.href);
@@ -89,8 +91,14 @@
     }
 
     async function load() {
+      const generation = ++loadGeneration;
       const err = document.getElementById("load-error");
+      const list = document.getElementById("list");
       err.hidden = true;
+      list.setAttribute("aria-busy", "true");
+      list.innerHTML = '<p class="loading">正在加载镜像…</p>';
+      document.getElementById("btn-prev").disabled = true;
+      document.getElementById("btn-next").disabled = true;
       const q = document.getElementById("q").value.trim();
       const registry = document.getElementById("registry").value;
       syncURL();
@@ -98,6 +106,7 @@
         let url = `/api/v1/images?limit=${limit}&offset=${offset}&q=${encodeURIComponent(q)}`;
         if (registry) url += `&registry=${encodeURIComponent(registry)}`;
         const data = await EDP.api(url);
+        if (generation !== loadGeneration) return;
         if (!registriesLoaded || (data.registries && data.registries.length)) {
           fillRegistries(data.registries || [], registry);
         }
@@ -107,6 +116,8 @@
         document.getElementById("page-hint").textContent = total
           ? `${offset + 1}–${Math.min(offset + limit, total)} / ${total}`
           : "0";
+        document.getElementById("btn-prev").disabled = offset <= 0;
+        document.getElementById("btn-next").disabled = offset + limit >= total;
         const rows = (data.items || []).map(im => {
           const href = `/stats/image.html?registry=${encodeURIComponent(im.registry)}&repository=${encodeURIComponent(im.repository)}`;
           return `<tr class="clickable" data-href="${href}">
@@ -136,8 +147,12 @@
           });
         });
       } catch (e) {
+        if (generation !== loadGeneration) return;
         err.hidden = false;
         err.textContent = e.message;
+        list.innerHTML = '<p class="empty">镜像列表加载失败</p>';
+      } finally {
+        if (generation === loadGeneration) list.setAttribute("aria-busy", "false");
       }
     }
 

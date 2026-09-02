@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -71,7 +70,7 @@ func (s *Store) BootstrapPullUser(ctx context.Context, username, password string
 func (s *Store) CreatePullUser(ctx context.Context, username, password string, enabled bool) (*PullUser, error) {
 	username = strings.TrimSpace(username)
 	if username == "" {
-		return nil, fmt.Errorf("username required")
+		return nil, ErrUsernameRequired
 	}
 	if err := validatePassword(password); err != nil {
 		return nil, err

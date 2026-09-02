@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -299,6 +300,122 @@ func TestReloadUpdatesRoutes(t *testing.T) {
 	if p.HostIndexLen() != 1 {
 		t.Fatalf("hosts %d", p.HostIndexLen())
 	}
+}
+
+func TestReloadReplacesTokenCache(t *testing.T) {
+	p := New(testConfig())
+	before := p.tokens
+	p.Reload(testConfig())
+	if p.tokens == before {
+		t.Fatal("reload must replace the token cache")
+	}
+}
+
+func TestStaleRouteCannotRepopulateClientCache(t *testing.T) {
+	p := New(testConfig())
+	req := httptest.NewRequest(http.MethodGet, "http://hub.example.com/v2/library/x/manifests/latest", nil)
+	req.Host = "hub.example.com"
+	stale := p.resolveRoute(req)
+
+	p.Reload(testConfig())
+	_ = p.getClient(stale.reg, stale.cfg, stale.generation)
+	if len(p.clients) != 0 {
+		t.Fatalf("stale request populated current client cache: %#v", p.clients)
+	}
+
+	current := p.resolveRoute(req)
+	_ = p.getClient(current.reg, current.cfg, current.generation)
+	if len(p.clients) != 1 {
+		t.Fatalf("current request did not populate client cache: %#v", p.clients)
+	}
+}
+
+func TestRedirectPolicyRejectsPrivateAndAllowsPublicTargets(t *testing.T) {
+	cfg := testConfig()
+	reg := &cfg.Registries[0]
+	check := redirectPolicy(reg, cfg)
+	via := []*http.Request{{URL: mustURL(t, reg.Upstream+"/v2/x/blobs/sha256:a")}}
+
+	privateReq := &http.Request{URL: mustURL(t, "https://127.0.0.1/blob"), Header: make(http.Header)}
+	if err := check(privateReq, via); err == nil {
+		t.Fatal("expected private redirect target to be rejected")
+	}
+
+	publicReq := &http.Request{URL: mustURL(t, "https://8.8.8.8/blob"), Header: make(http.Header)}
+	if err := check(publicReq, via); err != nil {
+		t.Fatalf("public redirect target rejected: %v", err)
+	}
+}
+
+func TestRedirectPolicyAllowsConfiguredHostAndStripsCrossHostAuth(t *testing.T) {
+	cfg := testConfig()
+	cfg.UpstreamAllowlist.Hosts = []string{"blob.internal.example"}
+	reg := &cfg.Registries[0]
+	check := redirectPolicy(reg, cfg)
+	via := []*http.Request{{URL: mustURL(t, reg.Upstream+"/v2/x/blobs/sha256:a")}}
+	req := &http.Request{
+		URL:    mustURL(t, "https://blob.internal.example/layer"),
+		Header: http.Header{"Authorization": []string{"Bearer upstream-secret"}},
+	}
+	if err := check(req, via); err != nil {
+		t.Fatalf("configured redirect host rejected: %v", err)
+	}
+	if got := req.Header.Get("Authorization"); got != "" {
+		t.Fatalf("authorization leaked across redirect: %q", got)
+	}
+}
+
+func TestRedirectPolicyEnforcesSchemeAndLimit(t *testing.T) {
+	cfg := testConfig()
+	reg := &cfg.Registries[0]
+	check := redirectPolicy(reg, cfg)
+	via := []*http.Request{{URL: mustURL(t, reg.Upstream)}}
+	if err := check(&http.Request{URL: mustURL(t, "http://8.8.8.8/blob"), Header: make(http.Header)}, via); err == nil {
+		t.Fatal("expected insecure redirect to be rejected")
+	}
+
+	tooMany := make([]*http.Request, 5)
+	for i := range tooMany {
+		tooMany[i] = &http.Request{URL: mustURL(t, reg.Upstream)}
+	}
+	if err := check(&http.Request{URL: mustURL(t, "https://8.8.8.8/blob"), Header: make(http.Header)}, tooMany); err == nil {
+		t.Fatal("expected redirect limit to be enforced")
+	}
+
+	insecureCfg := testConfig()
+	insecureCfg.AllowInsecureUpstream = true
+	insecureReg := &insecureCfg.Registries[0]
+	insecureReg.Upstream = "http://127.0.0.1:5000"
+	insecureCheck := redirectPolicy(insecureReg, insecureCfg)
+	insecureVia := []*http.Request{{URL: mustURL(t, insecureReg.Upstream+"/v2/x")}}
+	if err := insecureCheck(&http.Request{URL: mustURL(t, insecureReg.Upstream+"/blob"), Header: make(http.Header)}, insecureVia); err != nil {
+		t.Fatalf("same-authority development redirect rejected: %v", err)
+	}
+}
+
+func TestRemoveHopByHopRemovesConnectionNominatedHeaders(t *testing.T) {
+	h := http.Header{
+		"Connection":        []string{"keep-alive, X-Internal-Hop"},
+		"Keep-Alive":        []string{"timeout=5"},
+		"X-Internal-Hop":    []string{"secret"},
+		"X-End-To-End-Data": []string{"kept"},
+	}
+	removeHopByHop(h)
+	if h.Get("Connection") != "" || h.Get("Keep-Alive") != "" || h.Get("X-Internal-Hop") != "" {
+		t.Fatalf("hop-by-hop headers survived: %#v", h)
+	}
+	if got := h.Get("X-End-To-End-Data"); got != "kept" {
+		t.Fatalf("end-to-end header changed: %q", got)
+	}
+}
+
+func mustURL(t *testing.T, raw string) *url.URL {
+	t.Helper()
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
 }
 
 func TestIsRegistryPath(t *testing.T) {

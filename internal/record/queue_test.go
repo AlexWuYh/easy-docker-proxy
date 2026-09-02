@@ -2,6 +2,7 @@ package record
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -12,6 +13,18 @@ type memSink struct {
 	mu     sync.Mutex
 	events []Event
 	delay  time.Duration
+}
+
+type flakySink struct {
+	failures int32
+	calls    atomic.Int32
+}
+
+func (s *flakySink) WriteBatch(_ context.Context, _ []Event) error {
+	if s.calls.Add(1) <= s.failures {
+		return errors.New("temporary write failure")
+	}
+	return nil
 }
 
 func (m *memSink) WriteBatch(_ context.Context, events []Event) error {
@@ -100,4 +113,75 @@ func TestDropCounter(t *testing.T) {
 	// Start then close to drain.
 	q.Start()
 	q.Close()
+}
+
+func TestQueueRetriesTransientWriteFailure(t *testing.T) {
+	sink := &flakySink{failures: 2}
+	q := NewQueue(sink, Options{
+		Buffer: 4, BatchSize: 2, FlushInterval: time.Hour,
+		MaxWriteAttempts: 3, RetryBackoff: time.Millisecond,
+	})
+	q.Start()
+	q.Emit(Event{Registry: "r", EventType: EventManifest, Repository: "a", Status: 200})
+	q.Emit(Event{Registry: "r", EventType: EventBlob, Repository: "a", Status: 200})
+	q.Close()
+
+	if got := sink.calls.Load(); got != 3 {
+		t.Fatalf("write attempts=%d want 3", got)
+	}
+	if q.Written() != 2 || q.Dropped() != 0 {
+		t.Fatalf("written=%d dropped=%d", q.Written(), q.Dropped())
+	}
+}
+
+func TestQueueCountsBatchDroppedAfterRetryExhaustion(t *testing.T) {
+	sink := &flakySink{failures: 10}
+	q := NewQueue(sink, Options{
+		Buffer: 4, BatchSize: 2, FlushInterval: time.Hour,
+		MaxWriteAttempts: 3, RetryBackoff: time.Millisecond,
+	})
+	q.Start()
+	q.Emit(Event{Registry: "r", EventType: EventManifest, Repository: "a", Status: 200})
+	q.Emit(Event{Registry: "r", EventType: EventBlob, Repository: "a", Status: 200})
+	q.Close()
+
+	if got := sink.calls.Load(); got != 3 {
+		t.Fatalf("write attempts=%d want 3", got)
+	}
+	if q.Written() != 0 || q.Dropped() != 2 {
+		t.Fatalf("written=%d dropped=%d", q.Written(), q.Dropped())
+	}
+}
+
+func TestQueueStartIsIdempotent(t *testing.T) {
+	sink := &memSink{}
+	q := NewQueue(sink, Options{Buffer: 4, BatchSize: 1, FlushInterval: time.Hour})
+	q.Start()
+	q.Start()
+	q.Emit(Event{Registry: "r", EventType: EventManifest, Repository: "a", Status: 200})
+	q.Close()
+
+	if sink.len() != 1 || q.Written() != 1 {
+		t.Fatalf("events=%d written=%d", sink.len(), q.Written())
+	}
+}
+
+func TestQueueConcurrentEmitAndClose(t *testing.T) {
+	q := NewQueue(&memSink{}, Options{Buffer: 32, BatchSize: 8, FlushInterval: time.Millisecond})
+	q.Start()
+
+	var senders sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		senders.Add(1)
+		go func() {
+			defer senders.Done()
+			for j := 0; j < 200; j++ {
+				q.Emit(Event{Registry: "r", EventType: EventManifest, Repository: "a", Status: 200})
+			}
+		}()
+	}
+
+	q.Close()
+	senders.Wait()
+	q.Emit(Event{})
 }

@@ -1,9 +1,8 @@
 # Optional TLS edge in front of the data plane.
 #
-# Preferred client usage keeps ORIGINAL image names:
-#   docker pull nginx:alpine
-#   docker pull ghcr.io/owner/app:tag
-# Traffic reaches the proxy via registry-mirrors and/or internal DNS — see README.
+# Client model on one domain:
+#   - Docker Hub: registry-mirrors -> https://reg.example.com, then docker pull nginx:alpine
+#   - Other upstreams: docker pull reg.example.com/ghcr.io/owner/app:tag
 #
 # This file is ONLY for compose profile "edge".
 # If you already run Caddy on the host, use deploy/caddy.external.example instead
@@ -11,8 +10,8 @@
 #
 # Start bundled edge:
 #   docker compose --env-file .env -f deploy/docker-compose.yaml --profile edge up -d
-# Host ports default to 8080/8443 (EDGE_HTTP_PORT / EDGE_HTTPS_PORT).
-# trusted_proxies in proxy config must include the compose network CIDRs.
+# Host ports default to 80/443 (EDGE_HTTP_PORT / EDGE_HTTPS_PORT may override them).
+# configs/config.docker.yaml trusts only the PROXY_CADDY_IP peer injected by compose.
 
 # Example: corporate mirror hostname used as registry-mirrors target
 # (clients: "registry-mirrors": ["https://reg.example.com"]).
@@ -30,22 +29,6 @@ reg.example.com {
 		}
 	}
 }
-
-# Optional: separate edge names only if you also list them under registries[].hosts
-# and point clients/DNS accordingly (still prefer original image tags + mirrors/DNS).
-# hub-edge.example.com {
-# 	reverse_proxy proxy:5000 {
-# 		header_up Host {host}
-# 		header_up X-Forwarded-Host {host}
-# 		header_up X-Forwarded-Proto {scheme}
-# 		header_up X-Real-IP {remote_host}
-# 		header_up X-Forwarded-For {remote_host}
-# 		transport http {
-# 			read_timeout 0
-# 			write_timeout 0
-# 		}
-# 	}
-# }
 
 # Internal stats — prefer VPN / private DNS; still requires app login / admin token.
 # Do not expose on the public internet without additional controls.

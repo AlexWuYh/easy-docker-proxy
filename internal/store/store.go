@@ -262,7 +262,10 @@ ON CONFLICT(day, client_ip) DO UPDATE SET
 		if e.IsPull() {
 			pulls = 1
 		}
-		if e.IsError() {
+		// Dashboard error rate is manifest-scoped: keep numerator and
+		// denominator on the same request family. Blob failures remain in
+		// pull_events/RecentErrors but do not distort pull success rate.
+		if e.EventType == record.EventManifest && e.IsError() {
 			errors = 1
 		}
 		if _, err := upsDaily.ExecContext(ctx, day, e.Registry, repo, pulls, e.Bytes, errors); err != nil {

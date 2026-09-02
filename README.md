@@ -6,7 +6,7 @@ Lightweight **multi-upstream Docker Registry proxy**.
 
 - Streaming pull-through — **no image layer cache**
 - Pull records and a simple Stats web UI
-- Single **your own domain** entry via **registry-mirrors + path prefixes**
+- One **your own domain** entry: Hub references stay unchanged through `registry-mirrors`; non-Hub registries use an entry-domain path prefix
 - No Docker socket, no container management
 
 > **About domains in this docs**  
@@ -42,7 +42,12 @@ git clone https://github.com/AlexWuYh/easy-docker-proxy.git
 cd easy-docker-proxy
 
 cp .env.example .env
-# Set PROXY_ADMIN_TOKEN and PROXY_WEB_PASSWORD
+EDP_ADMIN_TOKEN="$(openssl rand -hex 32)"
+EDP_WEB_PASSWORD="$(openssl rand -base64 24 | tr -d '\n')"
+sed -i.bak -e "s|^PROXY_ADMIN_TOKEN=.*|PROXY_ADMIN_TOKEN=$EDP_ADMIN_TOKEN|" \
+  -e "s|^PROXY_WEB_PASSWORD=.*|PROXY_WEB_PASSWORD=$EDP_WEB_PASSWORD|" .env
+rm -f .env.bak
+unset EDP_ADMIN_TOKEN EDP_WEB_PASSWORD
 
 cp configs/config.docker.yaml configs/config.yaml
 # Replace hosts: reg.example.com with your real domain
@@ -52,7 +57,7 @@ docker compose --env-file .env -f deploy/docker-compose.yaml up -d --build
 
 | Item | Detail |
 |------|--------|
-| Data plane | Host **:5000** (not 80/443) |
+| Data plane | Host **127.0.0.1:5000** by default; publish through TLS |
 | Admin plane | **:5001**, not published publicly by default |
 | HTTPS | Prefer your existing Caddy → `127.0.0.1:5000` |
 | Stats UI | Map `127.0.0.1:5001`, open `/stats/login.html` |
@@ -67,8 +72,9 @@ Replace **`reg.a.c`** with your domain everywhere below.
 
 ### 1. Docker Hub (registry-mirrors, no path prefix)
 
+Put this valid JSON in `/etc/docker/daemon.json`:
+
 ```json
-// /etc/docker/daemon.json
 {
   "registry-mirrors": ["https://reg.a.c"]
 }
@@ -121,7 +127,7 @@ Docker Hub can also use mirrors with no prefix: `docker pull nginx`.
 
 - Env template: [.env.example](./.env.example). **Empty = public anonymous**; set tokens for private pulls or Hub rate limits.  
 - Set `enabled: false` to disable an upstream, or add your own `registries` entry.  
-- Field reference: [docs/install.md](./docs/install.md) (Chinese).
+- Field reference: [docs/configuration.md](./docs/configuration.md) (Chinese).
 
 ---
 
@@ -130,8 +136,10 @@ Docker Hub can also use mirrors with no prefix: `docker pull nginx`.
 | Doc | Content |
 |-----|---------|
 | [README.zh-CN.md](./README.zh-CN.md) | Chinese README |
-| [docs/install.md](./docs/install.md) | Install, config, Caddy, checklist, FAQ (Chinese) |
-| [deploy/README.md](./deploy/README.md) | Deploy architecture, security, backup (Chinese) |
+| [docs/install.md](./docs/install.md) | Installation tutorial (Chinese) |
+| [docs/configuration.md](./docs/configuration.md) | Configuration reference (Chinese) |
+| [docs/troubleshooting.md](./docs/troubleshooting.md) | Troubleshooting (Chinese) |
+| [deploy/README.md](./deploy/README.md) | Operations, security, backup and restore (Chinese) |
 | [configs/config.example.yaml](./configs/config.example.yaml) | Local config template |
 
 ---

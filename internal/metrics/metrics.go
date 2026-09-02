@@ -122,7 +122,7 @@ func (c *Collector) Handler(snapshotFn func()) http.Handler {
 		b.WriteString("# TYPE easy_docker_proxy_events_written_total counter\n")
 		fmt.Fprintf(&b, "easy_docker_proxy_events_written_total %d\n", c.eventsWritten.Load())
 
-		b.WriteString("# HELP easy_docker_proxy_events_dropped_total Pull events dropped because the async queue was full.\n")
+		b.WriteString("# HELP easy_docker_proxy_events_dropped_total Pull events dropped because the async queue was full or persistence retries were exhausted.\n")
 		b.WriteString("# TYPE easy_docker_proxy_events_dropped_total counter\n")
 		fmt.Fprintf(&b, "easy_docker_proxy_events_dropped_total %d\n", c.eventsDropped.Load())
 

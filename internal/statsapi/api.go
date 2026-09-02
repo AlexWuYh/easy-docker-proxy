@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net"
 	"net/http"
 	"strconv"
@@ -117,7 +118,8 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusUnauthorized, "用户名或密码错误")
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		log.Printf("[statsapi] login failed: %v", err)
+		writeErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 	writeJSON(w, http.StatusOK, sess)
@@ -157,7 +159,8 @@ func (a *API) handleUsers(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		list, err := a.Store.ListUsers(r.Context())
 		if err != nil {
-			writeErr(w, http.StatusInternalServerError, err.Error())
+			log.Printf("[statsapi] list users failed: %v", err)
+			writeErr(w, http.StatusInternalServerError, "internal server error")
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"items": list})
@@ -176,6 +179,11 @@ func (a *API) handleUsers(w http.ResponseWriter, r *http.Request) {
 			status := http.StatusBadRequest
 			if errors.Is(err, store.ErrUserExists) {
 				status = http.StatusConflict
+			} else if !errors.Is(err, store.ErrWeakPassword) && !errors.Is(err, store.ErrUsernameRequired) {
+				log.Printf("[statsapi] create user failed: %v", err)
+				status = http.StatusInternalServerError
+				writeErr(w, status, "internal server error")
+				return
 			}
 			writeErr(w, status, err.Error())
 			return
@@ -216,7 +224,12 @@ func (a *API) handleUserByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := a.Store.SetPassword(r.Context(), id, body.Password); err != nil {
-			writeErr(w, http.StatusBadRequest, err.Error())
+			if errors.Is(err, store.ErrWeakPassword) || errors.Is(err, store.ErrUserNotFound) {
+				writeErr(w, http.StatusBadRequest, err.Error())
+			} else {
+				log.Printf("[statsapi] set user password failed: %v", err)
+				writeErr(w, http.StatusInternalServerError, "internal server error")
+			}
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"success": true})
@@ -231,6 +244,10 @@ func (a *API) handleUserByID(w http.ResponseWriter, r *http.Request) {
 			status := http.StatusBadRequest
 			if errors.Is(err, store.ErrLastAdmin) {
 				status = http.StatusConflict
+			} else if !errors.Is(err, store.ErrUserNotFound) {
+				log.Printf("[statsapi] delete user failed: %v", err)
+				writeErr(w, http.StatusInternalServerError, "internal server error")
+				return
 			}
 			writeErr(w, status, err.Error())
 			return
@@ -251,7 +268,8 @@ func (a *API) handlePullUsers(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		list, err := a.Store.ListPullUsers(r.Context())
 		if err != nil {
-			writeErr(w, http.StatusInternalServerError, err.Error())
+			log.Printf("[statsapi] list pull users failed: %v", err)
+			writeErr(w, http.StatusInternalServerError, "internal server error")
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"items": list})
@@ -274,6 +292,10 @@ func (a *API) handlePullUsers(w http.ResponseWriter, r *http.Request) {
 			status := http.StatusBadRequest
 			if errors.Is(err, store.ErrPullUserExists) {
 				status = http.StatusConflict
+			} else if !errors.Is(err, store.ErrWeakPassword) && !errors.Is(err, store.ErrUsernameRequired) {
+				log.Printf("[statsapi] create pull user failed: %v", err)
+				writeErr(w, http.StatusInternalServerError, "internal server error")
+				return
 			}
 			writeErr(w, status, err.Error())
 			return
@@ -310,7 +332,12 @@ func (a *API) handlePullUserByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := a.Store.SetPullUserPassword(r.Context(), id, body.Password); err != nil {
-			writeErr(w, http.StatusBadRequest, err.Error())
+			if errors.Is(err, store.ErrWeakPassword) || errors.Is(err, store.ErrPullUserNotFound) {
+				writeErr(w, http.StatusBadRequest, err.Error())
+			} else {
+				log.Printf("[statsapi] set pull password failed: %v", err)
+				writeErr(w, http.StatusInternalServerError, "internal server error")
+			}
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"success": true})
@@ -325,7 +352,12 @@ func (a *API) handlePullUserByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := a.Store.SetPullUserEnabled(r.Context(), id, body.Enabled); err != nil {
-			writeErr(w, http.StatusBadRequest, err.Error())
+			if errors.Is(err, store.ErrPullUserNotFound) {
+				writeErr(w, http.StatusBadRequest, err.Error())
+			} else {
+				log.Printf("[statsapi] set pull enabled failed: %v", err)
+				writeErr(w, http.StatusInternalServerError, "internal server error")
+			}
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"success": true})
@@ -333,7 +365,12 @@ func (a *API) handlePullUserByID(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(parts) == 1 && r.Method == http.MethodDelete {
 		if err := a.Store.DeletePullUser(r.Context(), id); err != nil {
-			writeErr(w, http.StatusBadRequest, err.Error())
+			if errors.Is(err, store.ErrPullUserNotFound) {
+				writeErr(w, http.StatusBadRequest, err.Error())
+			} else {
+				log.Printf("[statsapi] delete pull user failed: %v", err)
+				writeErr(w, http.StatusInternalServerError, "internal server error")
+			}
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"success": true})
@@ -350,7 +387,8 @@ func (a *API) handleSummary(w http.ResponseWriter, r *http.Request) {
 	rangeStr := orDefault(r.URL.Query().Get("range"), "7d")
 	sum, err := a.Store.Summary(r.Context(), rangeStr)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		log.Printf("[statsapi] summary failed: %v", err)
+		writeErr(w, http.StatusBadRequest, "invalid range or query")
 		return
 	}
 	writeJSON(w, http.StatusOK, sum)
@@ -365,7 +403,8 @@ func (a *API) handleTimeseries(w http.ResponseWriter, r *http.Request) {
 	registry := strings.TrimSpace(r.URL.Query().Get("registry"))
 	pts, err := a.Store.Timeseries(r.Context(), rangeStr, registry)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		log.Printf("[statsapi] timeseries failed: %v", err)
+		writeErr(w, http.StatusBadRequest, "invalid range or query")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"range": rangeStr, "registry": registry, "points": pts})
@@ -381,7 +420,8 @@ func (a *API) handleTopRepos(w http.ResponseWriter, r *http.Request) {
 	registry := strings.TrimSpace(r.URL.Query().Get("registry"))
 	rows, err := a.Store.TopRepos(r.Context(), rangeStr, limit, registry)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		log.Printf("[statsapi] top repos failed: %v", err)
+		writeErr(w, http.StatusBadRequest, "invalid range or query")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"range": rangeStr, "registry": registry, "items": rows})
@@ -396,7 +436,8 @@ func (a *API) handleTopClients(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	rows, err := a.Store.TopClients(r.Context(), rangeStr, limit)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		log.Printf("[statsapi] top clients failed: %v", err)
+		writeErr(w, http.StatusBadRequest, "invalid range or query")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"range": rangeStr, "items": rows})
@@ -410,7 +451,8 @@ func (a *API) handleErrors(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	rows, err := a.Store.RecentErrors(r.Context(), limit)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		log.Printf("[statsapi] recent errors failed: %v", err)
+		writeErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": rows})
@@ -424,7 +466,8 @@ func (a *API) handleEvents(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	rows, err := a.Store.RecentEvents(r.Context(), limit)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		log.Printf("[statsapi] recent events failed: %v", err)
+		writeErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": rows})
@@ -441,7 +484,8 @@ func (a *API) handleImages(w http.ResponseWriter, r *http.Request) {
 	registry := strings.TrimSpace(r.URL.Query().Get("registry"))
 	items, total, err := a.Store.ListImages(r.Context(), q, registry, limit, offset)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		log.Printf("[statsapi] list images failed: %v", err)
+		writeErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 	regs, _ := a.Store.ListImageRegistries(r.Context())
@@ -463,7 +507,8 @@ func (a *API) handleImageTags(w http.ResponseWriter, r *http.Request) {
 	repo := r.URL.Query().Get("repository")
 	items, err := a.Store.ListImageTags(r.Context(), reg, repo)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		log.Printf("[statsapi] image tags failed: %v", err)
+		writeErr(w, http.StatusBadRequest, "invalid image query")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"registry": reg, "repository": repo, "items": items})
@@ -479,7 +524,8 @@ func (a *API) handleImageTimeseries(w http.ResponseWriter, r *http.Request) {
 	rangeStr := orDefault(r.URL.Query().Get("range"), "7d")
 	pts, err := a.Store.ImageAnalytics(r.Context(), reg, repo, rangeStr)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		log.Printf("[statsapi] image timeseries failed: %v", err)
+		writeErr(w, http.StatusBadRequest, "invalid image query or range")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"range": rangeStr, "points": pts})

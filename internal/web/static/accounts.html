@@ -26,11 +26,12 @@
           <div class="sub">Web 控制台账号 · Docker 拉取账号（相互独立）</div>
         </div>
       </div>
-      <div id="load-error" class="error-banner" hidden></div>
+      <div id="load-error" class="error-banner" role="alert" hidden></div>
+      <div id="action-status" class="error-banner" role="alert" aria-live="assertive" hidden></div>
 
       <section class="glass panel" style="margin-bottom:1rem">
         <div class="panel-head"><h2>当前 Web 用户</h2></div>
-        <p id="me-info" class="empty">—</p>
+        <p id="me-info" class="loading" aria-live="polite">正在加载当前账号…</p>
         <div class="form-row" style="grid-template-columns:1fr auto">
           <div class="field" style="margin:0">
             <label for="my-pass">修改我的密码</label>
@@ -60,7 +61,7 @@
           </div>
         </div>
         <button type="button" class="btn btn-accent" id="btn-create" style="margin-bottom:1rem">创建 Web 用户</button>
-        <div class="table-wrap" id="users"></div>
+        <div class="table-wrap" id="users" aria-live="polite"></div>
       </section>
 
       <section class="glass panel" id="pull-panel" hidden>
@@ -85,7 +86,7 @@
             <button type="button" class="btn btn-accent" id="btn-pull-create">创建拉取账号</button>
           </div>
         </div>
-        <div class="table-wrap" id="pull-users"></div>
+        <div class="table-wrap" id="pull-users" aria-live="polite"></div>
       </section>
     </main>
   </div>
@@ -93,6 +94,20 @@
   <script>
     if (!EDP.requireAuth()) throw new Error("auth");
     EDP.renderNav("accounts");
+    let usersGeneration = 0;
+    let pullUsersGeneration = 0;
+
+    function showActionError(message) {
+      const el = document.getElementById("action-status");
+      el.hidden = false;
+      el.textContent = message || "操作失败，请稍后重试";
+    }
+
+    function clearActionError() {
+      const el = document.getElementById("action-status");
+      el.hidden = true;
+      el.textContent = "";
+    }
 
     async function loadMe() {
       const me = await EDP.api("/api/v1/auth/me");
@@ -110,7 +125,21 @@
     }
 
     async function loadUsers() {
-      const data = await EDP.api("/api/v1/users");
+      const generation = ++usersGeneration;
+      const usersEl = document.getElementById("users");
+      usersEl.setAttribute("aria-busy", "true");
+      usersEl.innerHTML = '<p class="loading">正在加载 Web 用户…</p>';
+      let data;
+      try {
+        data = await EDP.api("/api/v1/users");
+      } catch (e) {
+        if (generation === usersGeneration) {
+          usersEl.setAttribute("aria-busy", "false");
+          usersEl.innerHTML = '<p class="empty">Web 用户加载失败</p>';
+        }
+        throw e;
+      }
+      if (generation !== usersGeneration) return;
       const me = EDP.getUser();
       const rows = (data.items || []).map(u => `<tr>
         <td>${u.id}</td>
@@ -119,67 +148,98 @@
         <td>${EDP.fmtTime(u.created_at)}</td>
         <td>
           ${me && me.id !== u.id
-            ? `<button type="button" class="btn btn-danger" data-del="${u.id}" style="min-height:36px;font-size:0.8rem">删除</button>`
+            ? `<button type="button" class="btn btn-danger" data-del="${u.id}" data-del-name="${EDP.esc(u.username)}" style="min-height:36px;font-size:0.8rem">删除</button>`
             : "—"}
         </td>
       </tr>`).join("");
-      document.getElementById("users").innerHTML = `
+      usersEl.innerHTML = rows ? `
         <table class="data"><thead><tr>
           <th>ID</th><th>用户名</th><th>角色</th><th>创建时间</th><th></th>
-        </tr></thead><tbody>${rows || ""}</tbody></table>`;
+        </tr></thead><tbody>${rows}</tbody></table>` : '<p class="empty">暂无 Web 用户</p>';
+      usersEl.setAttribute("aria-busy", "false");
       document.querySelectorAll("[data-del]").forEach(btn => {
         btn.addEventListener("click", async () => {
-          if (!confirm("确认删除该用户？")) return;
+          const username = btn.getAttribute("data-del-name");
+          if (!confirm(`删除 Web 用户“${username}”后，其现有登录会话将立即失效。确认继续？`)) return;
           try {
+            btn.disabled = true;
             await EDP.api("/api/v1/users/" + btn.getAttribute("data-del"), { method: "DELETE" });
             await loadUsers();
-          } catch (e) {
-            alert(e.message);
-          }
+          } catch (e) { showActionError(e.message); }
+          finally { btn.disabled = false; }
         });
       });
     }
 
     async function loadPullUsers() {
-      const data = await EDP.api("/api/v1/pull-users");
+      const generation = ++pullUsersGeneration;
+      const pullUsersEl = document.getElementById("pull-users");
+      pullUsersEl.setAttribute("aria-busy", "true");
+      pullUsersEl.innerHTML = '<p class="loading">正在加载拉取账号…</p>';
+      let data;
+      try {
+        data = await EDP.api("/api/v1/pull-users");
+      } catch (e) {
+        if (generation === pullUsersGeneration) {
+          pullUsersEl.setAttribute("aria-busy", "false");
+          pullUsersEl.innerHTML = '<p class="empty">拉取账号加载失败</p>';
+        }
+        throw e;
+      }
+      if (generation !== pullUsersGeneration) return;
       const rows = (data.items || []).map(u => `<tr>
         <td>${u.id}</td>
         <td class="mono">${EDP.esc(u.username)}</td>
         <td><span class="badge ${u.enabled ? "badge-ok" : "badge-err"}">${u.enabled ? "enabled" : "disabled"}</span></td>
         <td>${EDP.fmtTime(u.created_at)}</td>
         <td>
-          <button type="button" class="btn btn-ghost" data-pull-toggle="${u.id}" data-en="${u.enabled ? "0" : "1"}" style="min-height:36px;font-size:0.8rem">${u.enabled ? "禁用" : "启用"}</button>
-          <button type="button" class="btn btn-danger" data-pull-del="${u.id}" style="min-height:36px;font-size:0.8rem">删除</button>
+          <button type="button" class="btn btn-ghost" data-pull-toggle="${u.id}" data-pull-name="${EDP.esc(u.username)}" data-en="${u.enabled ? "0" : "1"}" style="min-height:36px;font-size:0.8rem">${u.enabled ? "禁用" : "启用"}</button>
+          <button type="button" class="btn btn-danger" data-pull-del="${u.id}" data-pull-name="${EDP.esc(u.username)}" style="min-height:36px;font-size:0.8rem">删除</button>
         </td>
       </tr>`).join("");
-      document.getElementById("pull-users").innerHTML = rows
+      pullUsersEl.innerHTML = rows
         ? `<table class="data"><thead><tr>
             <th>ID</th><th>用户名</th><th>状态</th><th>创建</th><th></th>
           </tr></thead><tbody>${rows}</tbody></table>`
         : '<p class="empty">暂无拉取账号。可创建，或用环境变量 PROXY_PULL_PASSWORD 首次引导。</p>';
+      pullUsersEl.setAttribute("aria-busy", "false");
       document.querySelectorAll("[data-pull-del]").forEach(btn => {
         btn.addEventListener("click", async () => {
-          if (!confirm("确认删除该拉取账号？")) return;
+          const username = btn.getAttribute("data-pull-name");
+          if (!confirm(`删除拉取账号“${username}”后，使用该账号的 Docker 登录和后续拉取将失败。确认继续？`)) return;
           try {
+            btn.disabled = true;
             await EDP.api("/api/v1/pull-users/" + btn.getAttribute("data-pull-del"), { method: "DELETE" });
             await loadPullUsers();
-          } catch (e) { alert(e.message); }
+          } catch (e) { showActionError(e.message); }
+          finally { btn.disabled = false; }
         });
       });
       document.querySelectorAll("[data-pull-toggle]").forEach(btn => {
         btn.addEventListener("click", async () => {
+          const username = btn.getAttribute("data-pull-name");
+          const enabling = btn.getAttribute("data-en") === "1";
+          const consequence = enabling
+            ? `启用拉取账号“${username}”后，该账号可重新用于 Docker 登录和拉取。确认继续？`
+            : `禁用拉取账号“${username}”后，使用该账号的 Docker 登录和后续拉取将失败。确认继续？`;
+          if (!confirm(consequence)) return;
           try {
+            btn.disabled = true;
             await EDP.api("/api/v1/pull-users/" + btn.getAttribute("data-pull-toggle") + "/enabled", {
               method: "PUT",
-              body: JSON.stringify({ enabled: btn.getAttribute("data-en") === "1" }),
+              body: JSON.stringify({ enabled: enabling }),
             });
             await loadPullUsers();
-          } catch (e) { alert(e.message); }
+          } catch (e) { showActionError(e.message); }
+          finally { btn.disabled = false; }
         });
       });
     }
 
     document.getElementById("btn-pull-create").addEventListener("click", async () => {
+      const btn = document.getElementById("btn-pull-create");
+      clearActionError();
+      btn.disabled = true;
       try {
         await EDP.api("/api/v1/pull-users", {
           method: "POST",
@@ -192,28 +252,31 @@
         document.getElementById("pull-user").value = "";
         document.getElementById("pull-pass").value = "";
         await loadPullUsers();
-      } catch (e) {
-        alert(e.message);
-      }
+      } catch (e) { showActionError(e.message); }
+      finally { btn.disabled = false; }
     });
 
     document.getElementById("btn-my-pass").addEventListener("click", async () => {
       const me = EDP.getUser();
       const pw = document.getElementById("my-pass").value;
+      const btn = document.getElementById("btn-my-pass");
+      clearActionError();
+      btn.disabled = true;
       try {
         await EDP.api("/api/v1/users/" + me.id + "/password", {
           method: "PUT",
           body: JSON.stringify({ password: pw }),
         });
-        alert("密码已更新，请重新登录");
+        showActionError("密码已更新，请重新登录");
         EDP.clearSession();
-        location.href = "/stats/login.html";
-      } catch (e) {
-        alert(e.message);
-      }
+        setTimeout(() => { location.href = "/stats/login.html"; }, 500);
+      } catch (e) { showActionError(e.message); btn.disabled = false; }
     });
 
     document.getElementById("btn-create").addEventListener("click", async () => {
+      const btn = document.getElementById("btn-create");
+      clearActionError();
+      btn.disabled = true;
       try {
         await EDP.api("/api/v1/users", {
           method: "POST",
@@ -226,9 +289,8 @@
         document.getElementById("new-user").value = "";
         document.getElementById("new-pass").value = "";
         await loadUsers();
-      } catch (e) {
-        alert(e.message);
-      }
+      } catch (e) { showActionError(e.message); }
+      finally { btn.disabled = false; }
     });
 
     loadMe().catch(e => {

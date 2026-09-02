@@ -177,7 +177,7 @@ func (h *Handler) handleReload(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		log.Printf("[admin] reload failed: %v", err)
-		writeJSONError(w, http.StatusInternalServerError, "reload failed: "+err.Error())
+		writeJSONError(w, http.StatusInternalServerError, "reload failed; check server logs")
 		return
 	}
 	n := 0

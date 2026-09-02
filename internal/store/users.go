@@ -7,7 +7,6 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -37,12 +36,13 @@ type SessionInfo struct {
 }
 
 var (
-	ErrUserExists     = errors.New("username already exists")
-	ErrUserNotFound   = errors.New("user not found")
-	ErrInvalidCreds   = errors.New("invalid username or password")
-	ErrInvalidSession = errors.New("invalid or expired session")
-	ErrLastAdmin      = errors.New("cannot remove the last admin")
-	ErrWeakPassword   = errors.New("password must be at least 8 characters")
+	ErrUserExists       = errors.New("username already exists")
+	ErrUserNotFound     = errors.New("user not found")
+	ErrInvalidCreds     = errors.New("invalid username or password")
+	ErrInvalidSession   = errors.New("invalid or expired session")
+	ErrLastAdmin        = errors.New("cannot remove the last admin")
+	ErrWeakPassword     = errors.New("password must be at least 8 characters")
+	ErrUsernameRequired = errors.New("username required")
 )
 
 // CountUsers returns number of web users.
@@ -86,7 +86,7 @@ func validatePassword(pw string) error {
 func (s *Store) CreateUser(ctx context.Context, username, password, role string) (*User, error) {
 	username = strings.TrimSpace(username)
 	if username == "" {
-		return nil, fmt.Errorf("username required")
+		return nil, ErrUsernameRequired
 	}
 	if err := validatePassword(password); err != nil {
 		return nil, err
@@ -233,27 +233,42 @@ UPDATE web_users SET password_hash = ?, updated_at = ? WHERE id = ?`, string(has
 
 // DeleteUser removes a user; refuses to delete the last admin.
 func (s *Store) DeleteUser(ctx context.Context, userID int64) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	var role string
-	err := s.db.QueryRowContext(ctx, `SELECT role FROM web_users WHERE id = ?`, userID).Scan(&role)
+	err = tx.QueryRowContext(ctx, `SELECT role FROM web_users WHERE id = ?`, userID).Scan(&role)
 	if err == sql.ErrNoRows {
 		return ErrUserNotFound
 	}
 	if err != nil {
 		return err
 	}
+	var res sql.Result
 	if role == RoleAdmin {
-		var admins int64
-		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM web_users WHERE role = ?`, RoleAdmin).Scan(&admins); err != nil {
-			return err
-		}
-		if admins <= 1 {
+		res, err = tx.ExecContext(ctx, `
+DELETE FROM web_users
+WHERE id = ? AND (SELECT COUNT(*) FROM web_users WHERE role = ?) > 1`, userID, RoleAdmin)
+	} else {
+		res, err = tx.ExecContext(ctx, `DELETE FROM web_users WHERE id = ?`, userID)
+	}
+	if err != nil {
+		return err
+	}
+	deleted, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if deleted == 0 {
+		if role == RoleAdmin {
 			return ErrLastAdmin
 		}
+		return ErrUserNotFound
 	}
-	// Explicit session cleanup (also covered by FK ON DELETE CASCADE when enabled).
-	_, _ = s.db.ExecContext(ctx, `DELETE FROM web_sessions WHERE user_id = ?`, userID)
-	_, err = s.db.ExecContext(ctx, `DELETE FROM web_users WHERE id = ?`, userID)
-	return err
+	return tx.Commit()
 }
 
 // PurgeExpiredSessions removes expired session rows.

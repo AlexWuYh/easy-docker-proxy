@@ -15,17 +15,21 @@ type Sink interface {
 
 // Queue is a bounded async event pipeline: Emit never blocks; full queue drops events.
 type Queue struct {
-	ch         chan Event
-	sink       Sink
-	batchN     int
-	flushEvery time.Duration
+	ch           chan Event
+	sink         Sink
+	batchN       int
+	flushEvery   time.Duration
+	maxAttempts  int
+	retryBackoff time.Duration
 
 	dropped atomic.Uint64
 	written atomic.Uint64
 	closed  atomic.Bool
 
-	stopOnce sync.Once
-	wg       sync.WaitGroup
+	emitMu    sync.Mutex
+	startOnce sync.Once
+	stopOnce  sync.Once
+	wg        sync.WaitGroup
 }
 
 // Options configures the ingest queue.
@@ -36,6 +40,10 @@ type Options struct {
 	BatchSize int
 	// FlushInterval flushes at least this often (default 1s).
 	FlushInterval time.Duration
+	// MaxWriteAttempts includes the initial sink write (default 3).
+	MaxWriteAttempts int
+	// RetryBackoff is the delay before the second attempt; later delays grow linearly (default 100ms).
+	RetryBackoff time.Duration
 }
 
 // NewQueue creates a queue. Call Start then Emit; Close flushes remaining events.
@@ -49,11 +57,19 @@ func NewQueue(sink Sink, opt Options) *Queue {
 	if opt.FlushInterval <= 0 {
 		opt.FlushInterval = time.Second
 	}
+	if opt.MaxWriteAttempts <= 0 {
+		opt.MaxWriteAttempts = 3
+	}
+	if opt.RetryBackoff <= 0 {
+		opt.RetryBackoff = 100 * time.Millisecond
+	}
 	return &Queue{
-		ch:         make(chan Event, opt.Buffer),
-		sink:       sink,
-		batchN:     opt.BatchSize,
-		flushEvery: opt.FlushInterval,
+		ch:           make(chan Event, opt.Buffer),
+		sink:         sink,
+		batchN:       opt.BatchSize,
+		flushEvery:   opt.FlushInterval,
+		maxAttempts:  opt.MaxWriteAttempts,
+		retryBackoff: opt.RetryBackoff,
 	}
 }
 
@@ -62,13 +78,25 @@ func (q *Queue) Start() {
 	if q == nil {
 		return
 	}
-	q.wg.Add(1)
-	go q.loop()
+	q.startOnce.Do(func() {
+		q.emitMu.Lock()
+		defer q.emitMu.Unlock()
+		if q.closed.Load() {
+			return
+		}
+		q.wg.Add(1)
+		go q.loop()
+	})
 }
 
 // Emit enqueues e without blocking. Drops when full or after Close (fail-open for pull path).
 func (q *Queue) Emit(e Event) {
-	if q == nil || q.closed.Load() {
+	if q == nil {
+		return
+	}
+	q.emitMu.Lock()
+	defer q.emitMu.Unlock()
+	if q.closed.Load() {
 		return
 	}
 	if e.TS.IsZero() {
@@ -81,7 +109,7 @@ func (q *Queue) Emit(e Event) {
 	}
 }
 
-// Dropped returns the number of events discarded because the buffer was full.
+// Dropped returns events discarded because the buffer was full or persistence exhausted its retries.
 func (q *Queue) Dropped() uint64 {
 	if q == nil {
 		return 0
@@ -104,8 +132,10 @@ func (q *Queue) Close() {
 		return
 	}
 	q.stopOnce.Do(func() {
+		q.emitMu.Lock()
 		q.closed.Store(true)
 		close(q.ch)
+		q.emitMu.Unlock()
 		q.wg.Wait()
 	})
 }
@@ -117,18 +147,31 @@ func (q *Queue) loop() {
 	defer ticker.Stop()
 
 	flush := func() {
-		if len(batch) == 0 || q.sink == nil {
+		if len(batch) == 0 {
+			return
+		}
+		if q.sink == nil {
+			q.dropped.Add(uint64(len(batch)))
 			batch = batch[:0]
 			return
 		}
 		out := make([]Event, len(batch))
 		copy(out, batch)
 		batch = batch[:0]
-		if err := q.sink.WriteBatch(context.Background(), out); err != nil {
-			log.Printf("[record] write batch (%d): %v", len(out), err)
+		for attempt := 1; attempt <= q.maxAttempts; attempt++ {
+			if err := q.sink.WriteBatch(context.Background(), out); err != nil {
+				if attempt == q.maxAttempts {
+					q.dropped.Add(uint64(len(out)))
+					log.Printf("[record] write batch (%d) failed after %d attempts: %v", len(out), attempt, err)
+					return
+				}
+				log.Printf("[record] write batch (%d) attempt %d/%d: %v", len(out), attempt, q.maxAttempts, err)
+				time.Sleep(time.Duration(attempt) * q.retryBackoff)
+				continue
+			}
+			q.written.Add(uint64(len(out)))
 			return
 		}
-		q.written.Add(uint64(len(out)))
 	}
 
 	for {

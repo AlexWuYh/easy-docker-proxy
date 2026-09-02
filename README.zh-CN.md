@@ -6,7 +6,7 @@
 
 - 流式转发，**不缓存镜像层**
 - 记录拉取并提供统计网页
-- 一个**自有域名**入口，客户端用 **mirrors + 路径前缀**
+- 一个**自有域名**入口：Hub 通过 `registry-mirrors` 保持原镜像名，非 Hub 仓库使用入口域名路径前缀
 - 无 Docker socket、无容器管理
 
 > **关于文档中的域名**  
@@ -42,7 +42,12 @@ git clone https://github.com/AlexWuYh/easy-docker-proxy.git
 cd easy-docker-proxy
 
 cp .env.example .env
-# 填写 PROXY_ADMIN_TOKEN、PROXY_WEB_PASSWORD
+EDP_ADMIN_TOKEN="$(openssl rand -hex 32)"
+EDP_WEB_PASSWORD="$(openssl rand -base64 24 | tr -d '\n')"
+sed -i.bak -e "s|^PROXY_ADMIN_TOKEN=.*|PROXY_ADMIN_TOKEN=$EDP_ADMIN_TOKEN|" \
+  -e "s|^PROXY_WEB_PASSWORD=.*|PROXY_WEB_PASSWORD=$EDP_WEB_PASSWORD|" .env
+rm -f .env.bak
+unset EDP_ADMIN_TOKEN EDP_WEB_PASSWORD
 
 cp configs/config.docker.yaml configs/config.yaml
 # 将 hosts 中的 reg.example.com 改成你的真实域名
@@ -52,7 +57,7 @@ docker compose --env-file .env -f deploy/docker-compose.yaml up -d --build
 
 | 项 | 说明 |
 |----|------|
-| 数据面 | 主机 **:5000**（不占 80/443） |
+| 数据面 | 默认仅主机 **127.0.0.1:5000**，通过 TLS 边缘发布 |
 | 管理面 | **:5001**，默认不映射到公网 |
 | HTTPS | 推荐已有 Caddy 反代到 `127.0.0.1:5000` |
 | 统计页 | 映射 `127.0.0.1:5001` 后访问 `/stats/login.html` |
@@ -67,8 +72,9 @@ docker compose --env-file .env -f deploy/docker-compose.yaml up -d --build
 
 ### 1. Docker Hub（mirrors，无路径前缀）
 
+将以下有效 JSON 写入 `/etc/docker/daemon.json`：
+
 ```json
-// /etc/docker/daemon.json
 {
   "registry-mirrors": ["https://reg.a.c"]
 }
@@ -121,7 +127,7 @@ Docker Hub 也可用 mirrors，直接 `docker pull nginx`（无前缀）。
 
 - 环境变量模板：[.env.example](./.env.example)。**留空 = 公共匿名**；私有库或 Hub 限流时再填 Token。  
 - 配置中可设 `enabled: false` 关闭某上游，或自行追加 `registries`。  
-- 字段说明：[docs/install.md](./docs/install.md)。
+- 字段说明：[docs/configuration.md](./docs/configuration.md)。
 
 ---
 
@@ -130,8 +136,10 @@ Docker Hub 也可用 mirrors，直接 `docker pull nginx`（无前缀）。
 | 文档 | 内容 |
 |------|------|
 | [README.md](./README.md) | English README（默认） |
-| [docs/install.md](./docs/install.md) | 安装、配置项、Caddy、验收、FAQ |
-| [deploy/README.md](./deploy/README.md) | 部署架构、安全清单、备份 |
+| [docs/install.md](./docs/install.md) | 安装教程 |
+| [docs/configuration.md](./docs/configuration.md) | 配置参考 |
+| [docs/troubleshooting.md](./docs/troubleshooting.md) | 故障排查 |
+| [deploy/README.md](./deploy/README.md) | 运维、安全、备份与恢复 |
 | [configs/config.example.yaml](./configs/config.example.yaml) | 本地配置模板 |
 
 ---

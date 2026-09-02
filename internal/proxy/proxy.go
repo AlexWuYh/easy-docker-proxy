@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/base64"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -53,6 +54,7 @@ type pathRoute struct {
 type Proxy struct {
 	mu         sync.RWMutex
 	cfg        *config.Config
+	generation uint64
 	hostIndex  map[string]*config.RegistryConfig
 	pathRoutes []pathRoute // longest-prefix first
 	defaultReg *config.RegistryConfig
@@ -60,8 +62,9 @@ type Proxy struct {
 	limiter    *ratelimit.Limiter
 	trusted    []*net.IPNet
 
-	clients   map[string]*http.Client
-	clientMux sync.Mutex
+	clients          map[string]*http.Client
+	clientGeneration uint64
+	clientMux        sync.Mutex
 
 	tokens *upstream.Cache
 
@@ -80,6 +83,9 @@ func New(cfg *config.Config) *Proxy {
 		tokens:  upstream.NewCache(),
 	}
 	p.apply(cfg)
+	p.clientMux.Lock()
+	p.clientGeneration = p.generation
+	p.clientMux.Unlock()
 	return p
 }
 
@@ -108,12 +114,14 @@ func (p *Proxy) SetPullAuthenticator(a PullAuthenticator) {
 func (p *Proxy) Reload(cfg *config.Config) {
 	cp := config.Clone(cfg)
 	p.mu.Lock()
+	p.tokens = upstream.NewCache()
 	p.applyLocked(cp)
+	generation := p.generation
 	p.mu.Unlock()
-	p.tokens.Clear()
 	// Drop HTTP clients so TLS/insecure settings take effect.
 	p.clientMux.Lock()
 	p.clients = make(map[string]*http.Client)
+	p.clientGeneration = generation
 	p.clientMux.Unlock()
 	log.Printf("proxy reloaded (%d registries)", len(cp.Registries))
 }
@@ -126,6 +134,7 @@ func (p *Proxy) apply(cfg *config.Config) {
 
 func (p *Proxy) applyLocked(cfg *config.Config) {
 	idx, paths, def := buildRoutes(cfg)
+	p.generation++
 	p.cfg = cfg
 	p.hostIndex = idx
 	p.pathRoutes = paths
@@ -223,6 +232,9 @@ func (p *Proxy) Config() *config.Config {
 type routeHit struct {
 	reg         *config.RegistryConfig
 	stripPrefix string // repository path prefix to strip before upstream (e.g. ghcr.io)
+	cfg         *config.Config
+	tokens      *upstream.Cache
+	generation  uint64
 }
 
 // ResolveRegistry picks an upstream (legacy helper for tests: ignores path rewrite).
@@ -238,29 +250,35 @@ func (p *Proxy) ResolveRegistry(r *http.Request) *config.RegistryConfig {
 func (p *Proxy) resolveRoute(r *http.Request) routeHit {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
+	hit := routeHit{cfg: p.cfg, tokens: p.tokens, generation: p.generation}
 
 	repo := extractRepo(r.URL.Path)
 	if repo != "" {
 		for _, pr := range p.pathRoutes {
 			if repo == pr.prefix || strings.HasPrefix(repo, pr.prefix+"/") {
-				return routeHit{reg: pr.reg, stripPrefix: pr.prefix}
+				hit.reg = pr.reg
+				hit.stripPrefix = pr.prefix
+				return hit
 			}
 		}
 	}
 
 	host := requestHost(r)
 	if reg, ok := p.hostIndex[host]; ok {
-		return routeHit{reg: reg}
+		hit.reg = reg
+		return hit
 	}
 	if p.isTrustedPeerLocked(r) {
 		if fwd := r.Header.Get("X-Forwarded-Host"); fwd != "" {
 			fh := strings.ToLower(strings.SplitN(fwd, ":", 2)[0])
 			if reg, ok := p.hostIndex[fh]; ok {
-				return routeHit{reg: reg}
+				hit.reg = reg
+				return hit
 			}
 		}
 	}
-	return routeHit{reg: p.defaultReg}
+	hit.reg = p.defaultReg
+	return hit
 }
 
 // isTrustedPeerLocked assumes p.mu is held for read (or exclusive).
@@ -535,7 +553,11 @@ func ipInNets(ipStr string, nets []*net.IPNet) bool {
 
 func (p *Proxy) proxyRequest(w http.ResponseWriter, r *http.Request, hit routeHit) (status int, written int64, errMsg string) {
 	reg := hit.reg
-	client := p.getClient(reg)
+	client := p.getClient(reg, hit.cfg, hit.generation)
+	tokens := hit.tokens
+	if tokens == nil {
+		tokens = upstream.NewCache()
+	}
 
 	target, err := url.Parse(reg.Upstream)
 	if err != nil {
@@ -556,7 +578,7 @@ func (p *Proxy) proxyRequest(w http.ResponseWriter, r *http.Request, hit routeHi
 
 	token := ""
 	if reg.Auth.Type != config.AuthAnonymous {
-		token = p.tokens.Peek(reg.Name, scope)
+		token = tokens.Peek(reg.Name, scope)
 	}
 	resp, err := p.doUpstream(client, r, target.String(), token, reg)
 	if err != nil {
@@ -571,13 +593,13 @@ func (p *Proxy) proxyRequest(w http.ResponseWriter, r *http.Request, hit routeHi
 		realm, service, _ := upstream.ParseBearerChallenge(challenge)
 		resp.Body.Close()
 		if token != "" {
-			p.tokens.InvalidateScope(reg.Name, scope)
+			tokens.InvalidateScope(reg.Name, scope)
 		}
 		if realm == "" {
 			http.Error(w, "unauthorized upstream", http.StatusBadGateway)
 			return http.StatusBadGateway, 0, "unauthorized upstream"
 		}
-		token, terr := p.tokens.GetToken(r.Context(), client, realm, service, scope, reg, p.Config())
+		token, terr := tokens.GetToken(r.Context(), client, realm, service, scope, reg, hit.cfg)
 		if terr != nil {
 			log.Printf("[ERR] token %s scope=%q: %v", reg.Name, scope, terr)
 			http.Error(w, "token error", http.StatusBadGateway)
@@ -597,6 +619,7 @@ func (p *Proxy) proxyRequest(w http.ResponseWriter, r *http.Request, hit routeHi
 	}
 
 	defer resp.Body.Close()
+	removeHopByHop(resp.Header)
 	copyHeaders(w.Header(), resp.Header)
 	// Client must not contact upstream auth server directly.
 	w.Header().Del("WWW-Authenticate")
@@ -733,12 +756,24 @@ func (p *Proxy) doUpstream(client *http.Client, r *http.Request, targetURL, toke
 	return client.Do(req)
 }
 
-func (p *Proxy) getClient(reg *config.RegistryConfig) *http.Client {
+func (p *Proxy) getClient(reg *config.RegistryConfig, cfg *config.Config, generation uint64) *http.Client {
 	p.clientMux.Lock()
 	defer p.clientMux.Unlock()
-	if c, ok := p.clients[reg.Name]; ok {
-		return c
+	if generation == p.clientGeneration {
+		if c, ok := p.clients[reg.Name]; ok {
+			return c
+		}
 	}
+	c := newRegistryHTTPClient(reg, cfg)
+	// A request resolved before Reload may finish with its original settings, but
+	// it must not repopulate the cache belonging to the new configuration.
+	if generation == p.clientGeneration {
+		p.clients[reg.Name] = c
+	}
+	return c
+}
+
+func newRegistryHTTPClient(reg *config.RegistryConfig, cfg *config.Config) *http.Client {
 	transport := &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
 		DialContext: (&net.Dialer{
@@ -753,9 +788,130 @@ func (p *Proxy) getClient(reg *config.RegistryConfig) *http.Client {
 	if reg.InsecureSkipVerify {
 		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // explicit config opt-in
 	}
-	c := &http.Client{Transport: transport}
-	p.clients[reg.Name] = c
-	return c
+	return &http.Client{
+		Transport:     transport,
+		CheckRedirect: redirectPolicy(reg, cfg),
+	}
+}
+
+func redirectPolicy(reg *config.RegistryConfig, cfg *config.Config) func(*http.Request, []*http.Request) error {
+	origin, _ := url.Parse(reg.Upstream)
+	return func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 5 {
+			return fmt.Errorf("stopped after 5 redirects")
+		}
+		if len(via) > 0 && canonicalAuthority(req.URL) != canonicalAuthority(via[len(via)-1].URL) {
+			req.Header.Del("Authorization")
+		}
+
+		switch strings.ToLower(req.URL.Scheme) {
+		case "https":
+			// Normal registry and public blob-CDN redirects.
+		case "http":
+			if cfg == nil || !cfg.AllowInsecureUpstream || origin == nil ||
+				strings.ToLower(origin.Scheme) != "http" || canonicalAuthority(req.URL) != canonicalAuthority(origin) {
+				return fmt.Errorf("redirect to insecure URL is not allowed")
+			}
+		default:
+			return fmt.Errorf("redirect uses unsupported scheme %q", req.URL.Scheme)
+		}
+
+		host := strings.ToLower(strings.TrimSpace(req.URL.Hostname()))
+		if host == "" {
+			return fmt.Errorf("redirect target has no host")
+		}
+		if redirectHostConfigured(host, origin, cfg) {
+			return nil
+		}
+		return requirePublicRedirectHost(req.Context(), host)
+	}
+}
+
+func canonicalAuthority(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	host := strings.ToLower(u.Hostname())
+	port := u.Port()
+	if port == "" {
+		switch strings.ToLower(u.Scheme) {
+		case "http":
+			port = "80"
+		case "https":
+			port = "443"
+		}
+	}
+	return net.JoinHostPort(host, port)
+}
+
+func redirectHostConfigured(host string, origin *url.URL, cfg *config.Config) bool {
+	if origin != nil && strings.EqualFold(host, origin.Hostname()) {
+		return true
+	}
+	if cfg == nil || !cfg.UpstreamAllowlist.IsEnabled() {
+		return false
+	}
+	for _, allowed := range cfg.UpstreamAllowlist.Hosts {
+		if strings.EqualFold(strings.TrimSpace(allowed), host) {
+			return true
+		}
+	}
+	return false
+}
+
+func requirePublicRedirectHost(ctx context.Context, host string) error {
+	if ip := net.ParseIP(host); ip != nil {
+		if isPublicRedirectIP(ip) {
+			return nil
+		}
+		return fmt.Errorf("redirect target %q is not a public address", host)
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	addrs, err := net.DefaultResolver.LookupIPAddr(lookupCtx, host)
+	if err != nil {
+		return fmt.Errorf("resolve redirect target %q: %w", host, err)
+	}
+	if len(addrs) == 0 {
+		return fmt.Errorf("redirect target %q resolved to no addresses", host)
+	}
+	for _, addr := range addrs {
+		if !isPublicRedirectIP(addr.IP) {
+			return fmt.Errorf("redirect target %q resolved to non-public address %s", host, addr.IP)
+		}
+	}
+	return nil
+}
+
+var nonPublicRedirectNets = mustIPNets(
+	"0.0.0.0/8", "100.64.0.0/10", "192.0.0.0/24", "192.0.2.0/24",
+	"192.88.99.0/24", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24",
+	"240.0.0.0/4", "2001:db8::/32",
+)
+
+func mustIPNets(cidrs ...string) []*net.IPNet {
+	nets := make([]*net.IPNet, 0, len(cidrs))
+	for _, cidr := range cidrs {
+		_, network, err := net.ParseCIDR(cidr)
+		if err != nil {
+			panic(err)
+		}
+		nets = append(nets, network)
+	}
+	return nets
+}
+
+func isPublicRedirectIP(ip net.IP) bool {
+	if ip == nil || !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() ||
+		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
+		return false
+	}
+	for _, network := range nonPublicRedirectNets {
+		if network.Contains(ip) {
+			return false
+		}
+	}
+	return true
 }
 
 // extractRepo returns the repository name from a Registry V2 path.
@@ -791,13 +947,13 @@ var hopHeaders = []string{
 }
 
 func removeHopByHop(h http.Header) {
-	for _, k := range hopHeaders {
-		h.Del(k)
-	}
 	if c := h.Get("Connection"); c != "" {
 		for _, f := range strings.Split(c, ",") {
 			h.Del(strings.TrimSpace(f))
 		}
+	}
+	for _, k := range hopHeaders {
+		h.Del(k)
 	}
 }
 

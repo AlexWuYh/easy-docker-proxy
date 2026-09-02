@@ -26,10 +26,11 @@ func TestSummaryAndTop(t *testing.T) {
 	today := time.Now().UTC()
 	day := today.Format("2006-01-02")
 	events := []record.Event{
-		{TS: today, ClientIP: "10.0.0.1", Registry: "dockerhub", EventType: record.EventManifest, Repository: "library/nginx", Reference: "latest", Status: 200, Bytes: 100},
+		{TS: today, ClientIP: "10.0.0.1", Registry: "dockerhub", EventType: record.EventManifest, Repository: "library/nginx", Reference: "latest", Status: 200, Bytes: 100, PullUser: "pull-bot"},
 		{TS: today, ClientIP: "10.0.0.1", Registry: "dockerhub", EventType: record.EventBlob, Repository: "library/nginx", Reference: "sha256:x", Status: 200, Bytes: 900},
 		{TS: today, ClientIP: "10.0.0.2", Registry: "ghcr", EventType: record.EventManifest, Repository: "o/img", Reference: "v1", Status: 200, Bytes: 50},
 		{TS: today, ClientIP: "10.0.0.2", Registry: "ghcr", EventType: record.EventManifest, Repository: "o/img", Reference: "v1", Status: 500, Bytes: 0, Error: "boom"},
+		{TS: today, ClientIP: "10.0.0.2", Registry: "ghcr", EventType: record.EventBlob, Repository: "o/img", Reference: "sha256:bad", Status: 500, Bytes: 0, Error: "blob failed"},
 	}
 	if err := st.WriteBatch(context.Background(), events); err != nil {
 		t.Fatal(err)
@@ -47,6 +48,9 @@ func TestSummaryAndTop(t *testing.T) {
 	}
 	if sum.ActiveClients != 2 {
 		t.Fatalf("clients=%d", sum.ActiveClients)
+	}
+	if sum.RangeErrors != 1 || sum.ErrorRate != 1.0/3.0 {
+		t.Fatalf("errors=%d rate=%f want manifest-only 1/3", sum.RangeErrors, sum.ErrorRate)
 	}
 	if len(sum.ByRegistry) < 2 {
 		t.Fatalf("by_registry=%+v", sum.ByRegistry)
@@ -86,8 +90,18 @@ func TestSummaryAndTop(t *testing.T) {
 		t.Fatalf("errors=%v err=%v", errs, err)
 	}
 	evs, err := st.RecentEvents(context.Background(), 10)
-	if err != nil || len(evs) != 4 {
+	if err != nil || len(evs) != 5 {
 		t.Fatalf("events=%d err=%v", len(evs), err)
+	}
+	foundPullUser := false
+	for _, event := range evs {
+		if event.PullUser == "pull-bot" {
+			foundPullUser = true
+			break
+		}
+	}
+	if !foundPullUser {
+		t.Fatalf("pull_user missing from recent events: %+v", evs)
 	}
 }
 

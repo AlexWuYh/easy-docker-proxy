@@ -37,15 +37,15 @@
           <button type="button" class="btn btn-primary" id="btn-refresh">刷新</button>
         </div>
       </div>
-      <div id="load-error" class="error-banner" hidden></div>
+      <div id="load-error" class="error-banner" role="alert" hidden></div>
 
       <div class="dim-tabs" role="tablist" aria-label="分析维度">
-        <button type="button" class="active" data-dim="overview">总览</button>
-        <button type="button" data-dim="upstream">上游仓库</button>
+        <button type="button" class="active" id="tab-overview" role="tab" aria-selected="true" aria-controls="view-overview" tabindex="0" data-dim="overview">总览</button>
+        <button type="button" id="tab-upstream" role="tab" aria-selected="false" aria-controls="view-upstream" tabindex="-1" data-dim="upstream">上游仓库</button>
       </div>
 
       <!-- ===== Overview ===== -->
-      <div id="view-overview">
+      <div id="view-overview" role="tabpanel" aria-labelledby="tab-overview">
         <section class="kpi-grid" id="kpis">
           <div class="glass kpi"><div class="label">今日 Pulls</div><div class="value" id="k-today-pulls">—</div></div>
           <div class="glass kpi"><div class="label">今日流量</div><div class="value" id="k-today-bytes">—</div></div>
@@ -58,22 +58,22 @@
         <div class="row">
           <section class="glass panel">
             <div class="panel-head"><h2>趋势 · Pulls / 流量</h2></div>
-            <div class="chart-wrap"><canvas id="chart-ts" aria-label="趋势图"></canvas></div>
+            <div class="chart-wrap"><canvas id="chart-ts" aria-label="趋势图"></canvas></div><p class="chart-summary" id="chart-ts-summary" role="status"></p>
           </section>
           <section class="glass panel">
             <div class="panel-head"><h2>上游占比 (Pulls)</h2></div>
-            <div class="chart-wrap"><canvas id="chart-reg" aria-label="上游占比"></canvas></div>
+            <div class="chart-wrap"><canvas id="chart-reg" aria-label="上游占比"></canvas></div><p class="chart-summary" id="chart-reg-summary" role="status"></p>
           </section>
         </div>
 
         <div class="row">
           <section class="glass panel">
             <div class="panel-head"><h2>流量 vs 错误（双轴）</h2></div>
-            <div class="chart-wrap"><canvas id="chart-err" aria-label="错误趋势"></canvas></div>
+            <div class="chart-wrap"><canvas id="chart-err" aria-label="错误趋势"></canvas></div><p class="chart-summary" id="chart-err-summary" role="status"></p>
           </section>
           <section class="glass panel">
             <div class="panel-head"><h2>上游流量占比</h2></div>
-            <div class="chart-wrap"><canvas id="chart-reg-bytes" aria-label="上游流量"></canvas></div>
+            <div class="chart-wrap"><canvas id="chart-reg-bytes" aria-label="上游流量"></canvas></div><p class="chart-summary" id="chart-reg-bytes-summary" role="status"></p>
           </section>
         </div>
 
@@ -96,7 +96,7 @@
       </div>
 
       <!-- ===== Upstream dimension ===== -->
-      <div id="view-upstream" hidden>
+      <div id="view-upstream" role="tabpanel" aria-labelledby="tab-upstream" hidden>
         <section class="glass panel">
           <div class="panel-head">
             <h2>上游汇总</h2>
@@ -108,11 +108,11 @@
         <div class="row" style="margin-top:1rem">
           <section class="glass panel">
             <div class="panel-head"><h2>上游 Pulls 占比</h2></div>
-            <div class="chart-wrap"><canvas id="chart-up-pulls" aria-label="上游 Pulls"></canvas></div>
+            <div class="chart-wrap"><canvas id="chart-up-pulls" aria-label="上游 Pulls"></canvas></div><p class="chart-summary" id="chart-up-pulls-summary" role="status"></p>
           </section>
           <section class="glass panel">
             <div class="panel-head"><h2>上游流量占比</h2></div>
-            <div class="chart-wrap"><canvas id="chart-up-bytes" aria-label="上游流量"></canvas></div>
+            <div class="chart-wrap"><canvas id="chart-up-bytes" aria-label="上游流量"></canvas></div><p class="chart-summary" id="chart-up-bytes-summary" role="status"></p>
           </section>
         </div>
 
@@ -137,7 +137,7 @@
           <div class="row">
             <div>
               <h3 style="font-size:0.9rem;margin:0 0 0.5rem">趋势</h3>
-              <div class="chart-wrap"><canvas id="chart-up-ts" aria-label="单上游趋势"></canvas></div>
+              <div class="chart-wrap"><canvas id="chart-up-ts" aria-label="单上游趋势"></canvas></div><p class="chart-summary" id="chart-up-ts-summary" role="status"></p>
             </div>
             <div>
               <h3 style="font-size:0.9rem;margin:0 0 0.5rem">该上游热门镜像</h3>
@@ -157,10 +157,29 @@
     let lastPts = [];
     let lastBy = [];
     let lastSummary = null;
+    let refreshGeneration = 0;
+    let upstreamGeneration = 0;
     const C = () => EDP.chartColors();
 
     function destroyChart(key) {
       if (charts[key]) { charts[key].destroy(); delete charts[key]; }
+    }
+
+    function setChartSummary(canvasId, text) {
+      const el = document.getElementById(canvasId + "-summary");
+      if (el) el.textContent = text || "暂无图表数据";
+    }
+
+    function wireRowLinks(selector) {
+      document.querySelectorAll(selector).forEach(row => {
+        row.tabIndex = 0;
+        row.setAttribute("role", "button");
+        const go = () => { location.href = row.getAttribute("data-href"); };
+        row.addEventListener("click", ev => { if (ev.target.tagName !== "A") go(); });
+        row.addEventListener("keydown", ev => {
+          if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); go(); }
+        });
+      });
     }
 
     function table(headers, rows) {
@@ -169,6 +188,9 @@
     }
 
     function updateTS(canvasId, key, points) {
+      const pulls = points.reduce((n, p) => n + (Number(p.pulls) || 0), 0);
+      const bytes = points.reduce((n, p) => n + (Number(p.bytes_total) || 0), 0);
+      setChartSummary(canvasId, `区间合计：Pulls ${pulls}，流量 ${EDP.formatBytes(bytes)}`);
       if (typeof Chart === "undefined") return;
       const c = C();
       destroyChart(key);
@@ -195,6 +217,9 @@
     }
 
     function updateErr(points) {
+      const pulls = points.reduce((n, p) => n + (Number(p.pulls) || 0), 0);
+      const errors = points.reduce((n, p) => n + (Number(p.errors) || 0), 0);
+      setChartSummary("chart-err", `区间合计：Pulls ${pulls}，manifest 错误 ${errors}`);
       if (typeof Chart === "undefined") return;
       const c = C();
       destroyChart("err");
@@ -220,6 +245,11 @@
     }
 
     function doughnut(id, key, labels, data) {
+      const total = data.reduce((n, v) => n + (Number(v) || 0), 0);
+      const isBytes = key.includes("bytes");
+      const fmt = v => isBytes ? EDP.formatBytes(v) : String(v);
+      const top = labels.length ? `${labels[0]} ${fmt(data[0])}` : "暂无数据";
+      setChartSummary(id, `合计 ${fmt(total)}；最大项 ${top}`);
       if (typeof Chart === "undefined") return;
       const c = C();
       destroyChart(key);
@@ -246,12 +276,7 @@
           <td><a href="/stats/image.html?registry=${encodeURIComponent(r.registry)}&repository=${encodeURIComponent(r.repository)}">详情</a></td>
         </tr>`).join("")
       );
-      document.querySelectorAll("#top-repos tr.clickable[data-href]").forEach(tr => {
-        tr.addEventListener("click", (ev) => {
-          if (ev.target.tagName === "A") return;
-          location.href = tr.getAttribute("data-href");
-        });
-      });
+      wireRowLinks("#top-repos tr.clickable[data-href]");
     }
 
     function renderUpstreamTable(by) {
@@ -268,11 +293,15 @@
         </tr>`).join("") || null
       );
       document.querySelectorAll("#upstream-table tr.clickable[data-reg]").forEach(tr => {
-        tr.addEventListener("click", () => {
+        tr.tabIndex = 0;
+        tr.setAttribute("role", "button");
+        const select = () => {
           const sel = document.getElementById("upstream-sel");
           sel.value = tr.getAttribute("data-reg");
           loadUpstreamDetail();
-        });
+        };
+        tr.addEventListener("click", select);
+        tr.addEventListener("keydown", ev => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); select(); } });
       });
     }
 
@@ -286,12 +315,14 @@
     }
 
     async function loadUpstreamDetail() {
+      const generation = ++upstreamGeneration;
       const reg = document.getElementById("upstream-sel").value;
       const range = document.getElementById("range").value;
       if (!reg) {
-        document.getElementById("up-k-pulls").textContent = "—";
+		["up-k-pulls", "up-k-bytes", "up-k-errors", "up-k-rate", "up-k-share", "up-k-bshare"].forEach(id => document.getElementById(id).textContent = "—");
         document.getElementById("up-repos").innerHTML = '<p class="empty">请选择上游</p>';
         destroyChart("upts");
+		setChartSummary("chart-up-ts", "请选择上游查看趋势");
         return;
       }
       const row = (lastBy || []).find(r => r.registry === reg);
@@ -304,10 +335,12 @@
         document.getElementById("up-k-bshare").textContent = EDP.formatPct(row.bytes_share);
       }
       const q = "range=" + encodeURIComponent(range) + "&registry=" + encodeURIComponent(reg);
+      document.getElementById("up-repos").innerHTML = '<p class="loading">正在加载上游明细…</p>';
       const [ts, repos] = await Promise.all([
         EDP.api("/api/v1/timeseries?" + q),
         EDP.api("/api/v1/top/repos?limit=15&" + q),
       ]);
+      if (generation !== upstreamGeneration) return;
       updateTS("chart-up-ts", "upts", ts.points || []);
       const more = `/stats/images.html?registry=${encodeURIComponent(reg)}`;
       document.getElementById("up-repos").innerHTML = table(
@@ -318,18 +351,22 @@
           <td><a href="/stats/image.html?registry=${encodeURIComponent(r.registry)}&repository=${encodeURIComponent(r.repository)}">详情</a></td>
         </tr>`).join("")
       ) + `<p style="margin-top:0.75rem"><a href="${more}">在镜像列表中查看该上游全部镜像 →</a></p>`;
-      document.querySelectorAll("#up-repos tr.clickable[data-href]").forEach(tr => {
-        tr.addEventListener("click", (ev) => {
-          if (ev.target.tagName === "A") return;
-          location.href = tr.getAttribute("data-href");
-        });
-      });
+      wireRowLinks("#up-repos tr.clickable[data-href]");
     }
 
     async function refresh() {
+      const generation = ++refreshGeneration;
+      upstreamGeneration++;
       const range = document.getElementById("range").value;
       const errEl = document.getElementById("load-error");
+      const refreshButton = document.getElementById("btn-refresh");
       errEl.hidden = true;
+      refreshButton.disabled = true;
+      document.querySelector("main").setAttribute("aria-busy", "true");
+      document.querySelectorAll("#kpis .value").forEach(el => { el.textContent = "…"; });
+      document.getElementById("top-repos").innerHTML = '<p class="loading">正在加载热门镜像…</p>';
+      document.getElementById("top-clients").innerHTML = '<p class="loading">正在加载客户端…</p>';
+      document.getElementById("upstream-table").innerHTML = '<p class="loading">正在加载上游汇总…</p>';
       try {
         const [summary, ts, repos, clients] = await Promise.all([
           EDP.api("/api/v1/summary?range=" + encodeURIComponent(range)),
@@ -337,6 +374,7 @@
           EDP.api("/api/v1/top/repos?limit=12&range=" + encodeURIComponent(range)),
           EDP.api("/api/v1/top/clients?limit=12&range=" + encodeURIComponent(range)),
         ]);
+        if (generation !== refreshGeneration) return;
         lastSummary = summary;
         document.getElementById("k-today-pulls").textContent = summary.today_pulls ?? 0;
         document.getElementById("k-today-bytes").textContent = EDP.formatBytes(summary.today_bytes);
@@ -366,22 +404,28 @@
         fillUpstreamSelect(lastBy);
         await loadUpstreamDetail();
       } catch (e) {
+        if (generation !== refreshGeneration) return;
         errEl.hidden = false;
         errEl.textContent = "加载失败: " + e.message;
+        document.querySelectorAll("#top-repos, #top-clients, #upstream-table, #up-repos").forEach(el => {
+          if (el.querySelector(".loading")) el.innerHTML = '<p class="empty">数据加载失败</p>';
+        });
+      } finally {
+        if (generation === refreshGeneration) {
+          refreshButton.disabled = false;
+          document.querySelector("main").setAttribute("aria-busy", "false");
+        }
       }
     }
 
     function showDim(dim) {
       document.getElementById("view-overview").hidden = dim !== "overview";
       document.getElementById("view-upstream").hidden = dim !== "upstream";
-      document.querySelectorAll(".dim-tabs button").forEach(b => {
-        b.classList.toggle("active", b.dataset.dim === dim);
-      });
       // Redraw charts when panel becomes visible (Chart.js needs layout)
       if (dim === "upstream" && lastBy.length) {
         doughnut("chart-up-pulls", "upp", lastBy.map(r => r.registry), lastBy.map(r => r.pulls));
         doughnut("chart-up-bytes", "upb", lastBy.map(r => r.registry), lastBy.map(r => r.bytes_total));
-        loadUpstreamDetail();
+        loadUpstreamDetail().catch(showLoadError);
       }
       if (dim === "overview" && lastPts.length) {
         updateTS("chart-ts", "ts", lastPts);
@@ -393,15 +437,14 @@
 
     document.getElementById("btn-refresh").addEventListener("click", refresh);
     document.getElementById("range").addEventListener("change", refresh);
-    document.getElementById("upstream-sel").addEventListener("change", () => loadUpstreamDetail().catch(e => {
+    function showLoadError(e) {
       document.getElementById("load-error").hidden = false;
       document.getElementById("load-error").textContent = e.message;
-    }));
-    document.querySelectorAll(".dim-tabs button").forEach(btn => {
-      btn.addEventListener("click", () => showDim(btn.dataset.dim));
-    });
+    }
+    document.getElementById("upstream-sel").addEventListener("change", () => loadUpstreamDetail().catch(showLoadError));
+    EDP.wireTabs(".dim-tabs", (btn) => showDim(btn.dataset.dim));
     window.addEventListener("edp-theme-change", () => {
-      const dim = document.querySelector(".dim-tabs button.active")?.dataset.dim || "overview";
+      const dim = document.querySelector('.dim-tabs [role="tab"][aria-selected="true"]')?.dataset.dim || "overview";
       showDim(dim);
     });
     window.addEventListener("load", refresh);

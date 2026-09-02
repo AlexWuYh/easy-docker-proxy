@@ -83,7 +83,7 @@ PROXY_WEB_PASSWORD=请换成足够长的密码
 | `NVCR_USER` / `NVCR_TOKEN` | NGC（用户名常为 `$oauthtoken`） |
 | `ELASTIC_USER` / `ELASTIC_TOKEN` | Elastic 镜像 |
 | `PROXY_PULL_USER` / `PROXY_PULL_PASSWORD` | 客户端 `docker login` 本代理（`pull_auth`） |
-| `EDGE_HTTP_PORT` / `EDGE_HTTPS_PORT` | 仅使用 compose 自带 Caddy 时（默认 8080/8443） |
+| `EDGE_HTTP_PORT` / `EDGE_HTTPS_PORT` | 仅使用 compose 自带 Caddy 时（默认 80/443） |
 
 完整清单与注释见仓库根目录 [.env.example](../.env.example)。
 
@@ -168,7 +168,7 @@ reg.example.com {
 | Host | 保留客户端 Host，与 `hosts` / 默认路由一致 |
 | 超时 | 大层传输建议 `read_timeout 0` |
 | 证书 | 只给**你的入口域名**配证即可（Caddy 自动 HTTPS 或自备证书） |
-| `trusted_proxies` | 只写真实边缘。同机 Caddy 用 `127.0.0.1/32`（示例默认）；compose 网内 Caddy 再加该桥网段。不要写整个 RFC1918 |
+| `trusted_proxies` | 只写真实边缘。同机 Caddy 用 `127.0.0.1/32`；compose edge 使用 `.env` 的 `PROXY_CADDY_IP` 单一地址。不要写整个 Docker/RFC1918 网段 |
 
 重载 Caddy 后，客户端 mirrors 使用 `https://<你的域名>`。
 
@@ -178,7 +178,7 @@ reg.example.com {
 docker compose --env-file .env -f deploy/docker-compose.yaml --profile edge up -d --build
 ```
 
-默认映射 **8080/8443**（避免占 80/443）。配置见 [deploy/Caddyfile](../deploy/Caddyfile)。
+默认映射 **80/443**。如宿主机已有服务，可在 `.env` 设置 `EDGE_HTTP_PORT` / `EDGE_HTTPS_PORT` 覆盖。配置见 [deploy/Caddyfile](../deploy/Caddyfile)。
 
 ### 4.3 仅 HTTP 试用（内网）
 
@@ -255,7 +255,8 @@ PROXY_PULL_PASSWORD=your-pull-password
 ```
 
 ```bash
-docker login reg.example.com -u puller -p 'your-pull-password'
+printf '%s' "$PROXY_PULL_PASSWORD" | docker login reg.example.com \\
+  --username "$PROXY_PULL_USER" --password-stdin
 ```
 
 与网页账号、上游 Hub/GHCR 密码**不是**同一套。也可在统计页「账号 → Docker 拉取账号」管理。

@@ -41,13 +41,18 @@ func TestWriteBatchAndAggregate(t *testing.T) {
 			EventType: record.EventManifest, Repository: "library/nginx", Reference: "alpine",
 			Method: "GET", Status: 404, Bytes: 0, DurationMS: 5,
 		},
+		{
+			TS: day, ClientIP: "10.0.0.3", Registry: "dockerhub", Host: "hub.example.com",
+			EventType: record.EventBlob, Repository: "library/nginx", Reference: "sha256:bad",
+			Method: "GET", Status: 500, Bytes: 0, DurationMS: 5,
+		},
 	}
 	if err := st.WriteBatch(context.Background(), events); err != nil {
 		t.Fatal(err)
 	}
 
 	n, err := st.CountEvents(context.Background())
-	if err != nil || n != 3 {
+	if err != nil || n != 4 {
 		t.Fatalf("count=%d err=%v", n, err)
 	}
 
@@ -66,7 +71,7 @@ func TestWriteBatchAndAggregate(t *testing.T) {
 		t.Fatalf("bytes=%d", s.BytesTotal)
 	}
 	if s.Errors != 1 {
-		t.Fatalf("errors=%d", s.Errors)
+		t.Fatalf("errors=%d want 1 (manifest failures only)", s.Errors)
 	}
 }
 

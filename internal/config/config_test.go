@@ -210,7 +210,8 @@ func TestLoadDocker(t *testing.T) {
 	if cfg.Server.AdminListen != "0.0.0.0:5001" {
 		t.Fatalf("admin_listen %q", cfg.Server.AdminListen)
 	}
-	if len(cfg.TrustedProxies) != 1 || cfg.TrustedProxies[0] != "127.0.0.1/32" {
+	if len(cfg.TrustedProxies) != 2 || cfg.TrustedProxies[0] != "127.0.0.1/32" ||
+		cfg.TrustedProxies[1] != "172.30.0.3" {
 		t.Fatalf("trusted_proxies %#v", cfg.TrustedProxies)
 	}
 }

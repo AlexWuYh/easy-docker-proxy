@@ -17,7 +17,7 @@
 > 文档中的 `reg.a.c` / `reg.example.com` 为**示例占位**。域名需自行申请，并添加 A/AAAA 或 CNAME 解析到代理主机，再在 Caddy 与 `config.yaml` 的 `hosts` 中填写真实主机名。
 
 - **不**挂载 `docker.sock`；镜像层不落盘  
-- TLS：**优先已有 Caddy** 反代到 **5000**；compose `edge` 仅备选（8080/8443）
+- TLS：**优先已有 Caddy** 反代到 **5000**；compose `edge` 仅备选（默认 80/443，可用 `EDGE_HTTP_PORT` / `EDGE_HTTPS_PORT` 覆盖）
 
 ## 快速部署（VPS）
 
@@ -74,7 +74,7 @@ docker compose --env-file .env -f deploy/docker-compose.yaml up -d --build
 curl -sS -o /dev/null -w '%{http_code}\n' -H 'Host: reg.example.com' http://127.0.0.1:5000/v2/
 ```
 
-`trusted_proxies` 只含真实 Caddy 出口（同机 `127.0.0.1/32`；compose 网内再加该桥，勿写整个 `172.16.0.0/12`）。
+`trusted_proxies` 只含真实 Caddy 出口（同机 `127.0.0.1/32`；compose 使用 `.env` 的 `PROXY_CADDY_IP`，勿写整个 `172.16.0.0/12`）。
 
 完整片段：[caddy.external.example](./caddy.external.example)（站点名改成你的域名）。
 
@@ -101,7 +101,7 @@ reg.example.com {
 | 超时 | blob 用 `read_timeout 0` |
 | 证书 | 只给**你的入口域名**配证，无需 ghcr.io 证书 |
 
-可选自带 Caddy：`--profile edge`（默认宿主机 8080/8443）。
+可选自带 Caddy：`--profile edge`（默认宿主机 80/443；端口冲突时通过 `.env` 覆盖）。
 
 ### 5. Stats / Metrics（仅本机或内网）
 
@@ -129,7 +129,7 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:5001/metrics
 
 1. 配置 `pull_auth.mode: optional` 或 `required`  
 2. 用 `PROXY_PULL_PASSWORD` 引导首个拉取账号，或在控制台「账号 → Docker 拉取账号」创建  
-3. `docker login <proxy-host> -u puller -p '...'`
+3. `printf '%s' "$PROXY_PULL_PASSWORD" | docker login <proxy-host> --username "$PROXY_PULL_USER" --password-stdin`
 
 ## 安全清单
 
@@ -154,7 +154,7 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:5001/metrics
 
 XFF 从**右往左**解析：跳过仍受信的跳，取第一个非受信地址。不要把整个 RFC1918 / Docker 网桥写进名单——compose 发布 `:5000` 时容器看到的 peer 经常是 `172.17.0.1`，那样公网客户端就能伪造 XFF 绕过限流和 ACL。
 
-默认示例只含 `127.0.0.1/32`（本机 Caddy）。compose 里的 Caddy 请改成该桥的网段（常见 `172.18.0.0/16`），不要写 `172.16.0.0/12`。
+默认示例只含 `127.0.0.1/32`（本机 Caddy）。compose 配置会额外信任 `.env` 中的 `PROXY_CADDY_IP` 单一地址；不要改成整个 Docker 网段或 `172.16.0.0/12`。
 
 错误配置会导致 IP ACL 失真或 Host 被伪造。
 
@@ -179,7 +179,7 @@ curl -X POST -H "Authorization: Bearer $TOKEN" http://127.0.0.1:5001/-/reload
 
 ## 备份
 
-只需备份 volume `proxy-data`（或 `/data/proxy.db`）与 `config.yaml` / `.env`（密钥）。
+SQLite 使用 WAL。推荐先停止 proxy，再同时备份 `proxy.db`、`proxy.db-wal`、`proxy.db-shm`（存在时）以及 `config.yaml` / `.env`；恢复时先停服务、恢复文件并校验权限，再启动并访问 `/healthz`。可执行命令见 [docs/troubleshooting.md](../docs/troubleshooting.md#sqlite-wal-备份与恢复)。
 
 ## 健康检查
 

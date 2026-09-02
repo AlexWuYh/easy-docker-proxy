@@ -35,21 +35,21 @@
           <button type="button" class="btn btn-primary" id="btn-refresh">刷新</button>
         </div>
       </div>
-      <div id="load-error" class="error-banner" hidden></div>
+      <div id="load-error" class="error-banner" role="alert" hidden></div>
 
       <div class="dim-tabs" role="tablist" aria-label="事件类型">
-        <button type="button" class="active" data-tab="errors">最近失败</button>
-        <button type="button" data-tab="events">全部事件</button>
+        <button type="button" class="active" id="tab-errors" role="tab" aria-selected="true" aria-controls="panel-errors" tabindex="0" data-tab="errors">最近失败</button>
+        <button type="button" id="tab-events" role="tab" aria-selected="false" aria-controls="panel-events" tabindex="-1" data-tab="events">全部事件</button>
       </div>
 
-      <section class="glass panel" id="panel-errors">
+      <section class="glass panel" id="panel-errors" role="tabpanel" aria-labelledby="tab-errors">
         <div class="panel-head"><h2>最近失败</h2></div>
-        <div class="table-wrap" id="errors"></div>
+        <div class="table-wrap" id="errors" aria-live="polite"></div>
       </section>
 
-      <section class="glass panel" id="panel-events" hidden style="margin-top:1rem">
+      <section class="glass panel" id="panel-events" role="tabpanel" aria-labelledby="tab-events" hidden style="margin-top:1rem">
         <div class="panel-head"><h2>最近事件（含成功）</h2></div>
-        <div class="table-wrap" id="events"></div>
+        <div class="table-wrap" id="events" aria-live="polite"></div>
       </section>
     </main>
   </div>
@@ -75,6 +75,7 @@
           <td><span class="badge badge-info">${EDP.esc(e.event_type || "—")}</span></td>
           <td><span class="badge ${e.status >= 400 ? "badge-err" : "badge-ok"}">${e.status || "—"}</span></td>
           <td class="mono">${EDP.esc(e.client_ip)}</td>
+		  <td class="mono">${EDP.esc(e.pull_user || "—")}</td>
           <td>${EDP.formatBytes(e.bytes || 0)}</td>
           <td class="mono">${EDP.esc(e.error || "")}</td>
           <td>${href ? `<a href="${href}">镜像</a>` : "—"}</td>
@@ -91,33 +92,41 @@
       });
     }
 
+    let loadGeneration = 0;
     async function load() {
+      const generation = ++loadGeneration;
       const err = document.getElementById("load-error");
+      const refresh = document.getElementById("btn-refresh");
       err.hidden = true;
+      refresh.disabled = true;
+      document.getElementById("errors").innerHTML = '<p class="loading">正在加载事件…</p>';
+      document.getElementById("events").innerHTML = '<p class="loading">正在加载事件…</p>';
       const limit = document.getElementById("limit").value;
       try {
         const [errors, events] = await Promise.all([
           EDP.api("/api/v1/errors?limit=" + encodeURIComponent(limit)),
           EDP.api("/api/v1/events?limit=" + encodeURIComponent(limit)),
         ]);
-        const headers = ["Time", "上游", "Repo", "Type", "Status", "IP", "Bytes", "Error", ""];
+        if (generation !== loadGeneration) return;
+        const headers = ["Time", "上游", "Repo", "Type", "Status", "IP", "拉取账号", "Bytes", "Error", ""];
         document.getElementById("errors").innerHTML = table(headers, evRows(errors.items));
         document.getElementById("events").innerHTML = table(headers, evRows(events.items));
         bindRows();
       } catch (e) {
+        if (generation !== loadGeneration) return;
         err.hidden = false;
         err.textContent = e.message;
+        document.getElementById("errors").innerHTML = '<p class="empty">事件加载失败</p>';
+        document.getElementById("events").innerHTML = '<p class="empty">事件加载失败</p>';
+      } finally {
+        if (generation === loadGeneration) refresh.disabled = false;
       }
     }
 
-    document.querySelectorAll(".dim-tabs button").forEach(btn => {
-      btn.addEventListener("click", () => {
-        document.querySelectorAll(".dim-tabs button").forEach(b => b.classList.remove("active"));
-        btn.classList.add("active");
-        const tab = btn.dataset.tab;
-        document.getElementById("panel-errors").hidden = tab !== "errors";
-        document.getElementById("panel-events").hidden = tab !== "events";
-      });
+    EDP.wireTabs(".dim-tabs", (btn) => {
+      const tab = btn.dataset.tab;
+      document.getElementById("panel-errors").hidden = tab !== "errors";
+      document.getElementById("panel-events").hidden = tab !== "events";
     });
     document.getElementById("btn-refresh").addEventListener("click", load);
     document.getElementById("limit").addEventListener("change", load);

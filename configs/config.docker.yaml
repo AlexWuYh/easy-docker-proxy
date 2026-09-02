@@ -14,12 +14,14 @@ server:
 default: dockerhub
 log_level: normal
 
-# Only the real reverse-proxy hop. Do NOT list RFC1918/docker bridges:
-# published :5000 then looks like 172.17.0.1 and clients can spoof XFF.
+# Exact peers from deploy/docker-compose.yaml. Do not replace these with a broad
+# RFC1918 or Docker bridge range. If the fixed compose network changes, update
+# these addresses and the compose IPAM block together.
 trusted_proxies:
   - "127.0.0.1/32"
-  # compose Caddy on the same user-defined bridge, e.g.:
-  # - "172.18.0.0/16"
+  # Bundled Caddy peer; compose injects the value (default 172.30.0.3).
+  # Remove this entry when using an existing host-level reverse proxy only.
+  - "${PROXY_CADDY_IP:-172.30.0.3}"
 
 access_control:
   mode: off
@@ -49,7 +51,6 @@ storage:
 
 admin:
   token_env: PROXY_ADMIN_TOKEN
-  stats_require_auth: true
 
 # path_prefixes: docker pull <入口>/ghcr.io/owner/img:tag
 # hosts: 统一入口 Host（与 HTTPS 域名一致）

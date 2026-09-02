@@ -93,8 +93,7 @@ type StorageConfig struct {
 
 // AdminConfig controls admin/stats authentication.
 type AdminConfig struct {
-	TokenEnv         string `yaml:"token_env" json:"token_env"`
-	StatsRequireAuth bool   `yaml:"stats_require_auth" json:"stats_require_auth"`
+	TokenEnv string `yaml:"token_env" json:"token_env"`
 }
 
 // MetricsConfig toggles Prometheus exposition on the admin plane.
@@ -171,14 +170,22 @@ var DefaultUpstreamHosts = []string{
 	"public.ecr.aws",
 }
 
-var envPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+var envPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}`)
 
 // ExpandEnv replaces ${VAR} placeholders with environment values.
 // Unset variables expand to empty string.
 func ExpandEnv(s string) string {
 	return envPattern.ReplaceAllStringFunc(s, func(m string) string {
-		name := envPattern.FindStringSubmatch(m)[1]
-		return os.Getenv(name)
+		parts := envPattern.FindStringSubmatch(m)
+		name := parts[1]
+		value, ok := os.LookupEnv(name)
+		if ok && value != "" {
+			return value
+		}
+		if len(parts) > 3 && parts[3] != "" {
+			return parts[3]
+		}
+		return value
 	})
 }
 
@@ -256,18 +263,6 @@ func Normalize(cfg *Config) {
 	}
 	if len(cfg.UpstreamAllowlist.Hosts) == 0 && cfg.UpstreamAllowlist.IsEnabled() {
 		cfg.UpstreamAllowlist.Hosts = append([]string(nil), DefaultUpstreamHosts...)
-	}
-	// Default true when field omitted in YAML (zero value is false for bool).
-	// StatsRequireAuth is true in example; treat zero as true by checking with pointer
-	// — keep simple: always require auth unless explicitly false would need *bool.
-	// Example has stats_require_auth: true. For security default true when unset:
-	// we cannot distinguish unset vs false with plain bool; document that false must be set.
-	// Prefer fail-closed: if not present, yaml gives false. Force true unless
-	// we use a custom approach. Our example sets true; Normalize forces true for M1.
-	if !cfg.Admin.StatsRequireAuth {
-		// Keep user-set false only if they wrote false intentionally — for M1
-		// always require auth (fail-closed). Override zero-value false → true.
-		cfg.Admin.StatsRequireAuth = true
 	}
 	for i := range cfg.Registries {
 		r := &cfg.Registries[i]

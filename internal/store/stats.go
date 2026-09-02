@@ -11,18 +11,18 @@ import (
 
 // Summary is the dashboard overview payload.
 type Summary struct {
-	Range           string          `json:"range"`
-	TodayPulls      int64           `json:"today_pulls"`
-	TodayBytes      int64           `json:"today_bytes"`
-	TodayErrors     int64           `json:"today_errors"`
-	RangePulls      int64           `json:"range_pulls"`
-	RangeBytes      int64           `json:"range_bytes"`
-	RangeErrors     int64           `json:"range_errors"`
-	ErrorRate       float64         `json:"error_rate"` // range_errors / max(range_pulls+range_errors, 1)
-	ActiveClients   int64           `json:"active_clients"`
-	ByRegistry      []RegistryShare `json:"by_registry"`
-	FromDay         string          `json:"from_day"`
-	ToDay           string          `json:"to_day"`
+	Range         string          `json:"range"`
+	TodayPulls    int64           `json:"today_pulls"`
+	TodayBytes    int64           `json:"today_bytes"`
+	TodayErrors   int64           `json:"today_errors"`
+	RangePulls    int64           `json:"range_pulls"`
+	RangeBytes    int64           `json:"range_bytes"`
+	RangeErrors   int64           `json:"range_errors"`
+	ErrorRate     float64         `json:"error_rate"` // failed manifest requests / (successful + failed manifest requests)
+	ActiveClients int64           `json:"active_clients"`
+	ByRegistry    []RegistryShare `json:"by_registry"`
+	FromDay       string          `json:"from_day"`
+	ToDay         string          `json:"to_day"`
 }
 
 // RegistryShare is pulls/bytes/errors share per upstream registry.
@@ -31,7 +31,7 @@ type RegistryShare struct {
 	Pulls      int64   `json:"pulls"`
 	BytesTotal int64   `json:"bytes_total"`
 	Errors     int64   `json:"errors"`
-	ErrorRate  float64 `json:"error_rate"`
+	ErrorRate  float64 `json:"error_rate"`  // manifest failures / manifest attempts
 	PullShare  float64 `json:"pull_share"`  // fraction of total pulls in range
 	BytesShare float64 `json:"bytes_share"` // fraction of total bytes in range
 }
@@ -75,6 +75,7 @@ type EventRow struct {
 	Bytes      int64  `json:"bytes"`
 	DurationMS int64  `json:"duration_ms"`
 	UserAgent  string `json:"user_agent"`
+	PullUser   string `json:"pull_user"`
 	Error      string `json:"error"`
 }
 
@@ -351,7 +352,8 @@ func (s *Store) queryEvents(ctx context.Context, limit int, errorsOnly bool) ([]
 	q := `
 SELECT id, ts, client_ip, registry, COALESCE(host,''), event_type, repository,
        COALESCE(reference,''), COALESCE(method,''), COALESCE(status,0),
-       COALESCE(bytes,0), COALESCE(duration_ms,0), COALESCE(user_agent,''), COALESCE(error,'')
+       COALESCE(bytes,0), COALESCE(duration_ms,0), COALESCE(user_agent,''),
+       COALESCE(pull_user,''), COALESCE(error,'')
 FROM pull_events`
 	if errorsOnly {
 		q += ` WHERE status >= 400 OR (error IS NOT NULL AND error != '')`
@@ -368,7 +370,7 @@ FROM pull_events`
 		var e EventRow
 		if err := rows.Scan(&e.ID, &e.TS, &e.ClientIP, &e.Registry, &e.Host, &e.EventType,
 			&e.Repository, &e.Reference, &e.Method, &e.Status, &e.Bytes, &e.DurationMS,
-			&e.UserAgent, &e.Error); err != nil {
+			&e.UserAgent, &e.PullUser, &e.Error); err != nil {
 			return nil, err
 		}
 		out = append(out, e)
