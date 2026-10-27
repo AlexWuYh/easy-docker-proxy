@@ -35,7 +35,7 @@ sed -i.bak \
   -e "s|^PROXY_WEB_PASSWORD=.*|PROXY_WEB_PASSWORD=$(openssl rand -base64 24 | tr -d '\n')|" \
   -e "s|^PROXY_DOMAIN=.*|PROXY_DOMAIN=你的真实域名|" .env
 rm -f .env.bak
-# 可选：PROXY_PORT（宿主机数据面端口，默认 5000；macOS 常需改为 15000）
+# 可选：PROXY_PORT（宿主机数据面端口，默认 5000）
 
 cp configs/config.docker.yaml configs/config.yaml
 # hosts 已由 PROXY_DOMAIN 展开（你的入口域名，不是上游官方域名）

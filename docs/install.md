@@ -77,7 +77,7 @@ unset EDP_ADMIN_TOKEN EDP_WEB_PASSWORD
 |------|------|
 | `PROXY_DOMAIN` | **入口域名**（不带 `https://`）。同时用于 `config.yaml` 的 dockerhub `hosts` 和自带 Caddy 的站点名，无需再改 YAML / Caddyfile |
 | `PROXY_IMAGE` | 可选，镜像地址，默认 `ghcr.io/alexwuyh/easy-docker-proxy:latest` |
-| `PROXY_PORT` | 数据面发布到宿主机 `127.0.0.1` 的端口，默认 `5000`（容器内固定 5000）。macOS 上 5000 常被 AirPlay 占用，可改成 `15000` |
+| `PROXY_PORT` | 数据面发布到宿主机 `127.0.0.1` 的端口，默认 `5000`（容器内固定 5000）；端口被占用时修改，已有 Caddy 的反代目标需同步 |
 | `PROXY_ADMIN_TOKEN` | 运维 API / metrics，随机 ≥32 字节 |
 | `PROXY_WEB_USER` / `PROXY_WEB_PASSWORD` | 统计网页首次管理员（密码 ≥ 8 位；仅库为空时创建一次） |
 
@@ -394,7 +394,7 @@ http://127.0.0.1:5001/stats/login.html
 cp configs/config.example.yaml configs/config.yaml
 export PROXY_ADMIN_TOKEN="$(openssl rand -hex 32)"
 export PROXY_WEB_PASSWORD='your-long-password'
-# macOS 若 5000 被占用，改 config 中 listen: ":15000"
+# 端口被占用时，修改 config 中的 listen
 go run ./cmd/proxy -config configs/config.yaml
 
 CGO_ENABLED=0 go test ./...

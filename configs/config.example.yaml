@@ -9,7 +9,6 @@
 
 server:
   # 数据面默认 5000（避免占用 80/443）
-  # macOS AirPlay 占用时可改为 ":15000"
   listen: ":5000"
   admin_listen: "127.0.0.1:5001"
   read_timeout: 60

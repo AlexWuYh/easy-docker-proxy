@@ -53,7 +53,7 @@ unset EDP_ADMIN_TOKEN EDP_WEB_PASSWORD
 
 cp configs/config.docker.yaml configs/config.yaml
 # 并在 .env 中设置 PROXY_DOMAIN=<你的真实域名>（同时用于 hosts 与自带 Caddy）
-# 可选：宿主机 5000 被占用（如 macOS AirPlay）时设置 PROXY_PORT=15000
+# 可选：PROXY_PORT=<宿主机端口> 修改数据面发布端口（默认 5000）
 
 docker compose --env-file .env -f deploy/docker-compose.yaml up -d
 ```

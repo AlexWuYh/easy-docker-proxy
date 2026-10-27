@@ -53,7 +53,7 @@ unset EDP_ADMIN_TOKEN EDP_WEB_PASSWORD
 
 cp configs/config.docker.yaml configs/config.yaml
 # Also set PROXY_DOMAIN=<your real domain> in .env (feeds config hosts + bundled Caddy)
-# Optional: PROXY_PORT=15000 if host port 5000 is taken (e.g. macOS AirPlay)
+# Optional: PROXY_PORT=<host port> to change the published data-plane port (default 5000)
 
 docker compose --env-file .env -f deploy/docker-compose.yaml up -d
 ```
