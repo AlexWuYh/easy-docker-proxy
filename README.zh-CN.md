@@ -15,6 +15,8 @@
 
 详细步骤见 **[安装与配置指南](./docs/install.md)**。
 
+容器镜像：**[ghcr.io/alexwuyh/easy-docker-proxy](https://github.com/AlexWuYh/easy-docker-proxy/pkgs/container/easy-docker-proxy)**
+
 ---
 
 ## 界面预览
@@ -58,7 +60,7 @@ docker compose --env-file .env -f deploy/docker-compose.yaml up -d
 
 | 项 | 说明 |
 |----|------|
-| 镜像 | `ghcr.io/alexwuyh/easy-docker-proxy:latest`（多架构，发布 Release 时由 CI 构建）；加 `--build` 可本地源码构建 |
+| 镜像 | [`ghcr.io/alexwuyh/easy-docker-proxy:latest`](https://github.com/AlexWuYh/easy-docker-proxy/pkgs/container/easy-docker-proxy)（多架构，发布 Release 时由 CI 构建）；加 `--build` 可本地源码构建 |
 | 数据面 | 默认仅主机 **127.0.0.1:${PROXY_PORT:-5000}**，通过 TLS 边缘发布 |
 | 管理面 | **:5001**，默认不映射到公网 |
 | HTTPS | 推荐已有 Caddy 反代到 `127.0.0.1:5000` |

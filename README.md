@@ -13,6 +13,8 @@ Lightweight **multi-upstream Docker Registry proxy**.
 > Names like `reg.a.c`, `reg.example.com`, and `https://reg.a.c` are **examples only**.  
 > Before production use: (1) register a domain, (2) point A/AAAA (or CNAME) at the proxy host, (3) put the **real hostname** in Caddy/Nginx and in `config.yaml` → `hosts`.
 
+Container image: **[ghcr.io/alexwuyh/easy-docker-proxy](https://github.com/AlexWuYh/easy-docker-proxy/pkgs/container/easy-docker-proxy)**
+
 Full install and configuration (currently in Chinese): **[docs/install.md](./docs/install.md)**.
 
 ---
@@ -58,7 +60,7 @@ docker compose --env-file .env -f deploy/docker-compose.yaml up -d
 
 | Item | Detail |
 |------|--------|
-| Image | `ghcr.io/alexwuyh/easy-docker-proxy:latest` (multi-arch, built by CI on release); add `--build` to build from source |
+| Image | [`ghcr.io/alexwuyh/easy-docker-proxy:latest`](https://github.com/AlexWuYh/easy-docker-proxy/pkgs/container/easy-docker-proxy) (multi-arch, built by CI on release); add `--build` to build from source |
 | Data plane | Host **127.0.0.1:${PROXY_PORT:-5000}** by default; publish through TLS |
 | Admin plane | **:5001**, not published publicly by default |
 | HTTPS | Prefer your existing Caddy → `127.0.0.1:5000` |
