@@ -1,6 +1,6 @@
 # 容器部署配置 — 单域名混合接入（M6）
 # 复制为 configs/config.yaml。
-# reg.example.com 为示例占位：请换成你已申请并解析到本机的真实域名（与 Caddy 一致）。
+# 入口域名由 .env 的 PROXY_DOMAIN 提供（默认占位 reg.example.com），无需手改本文件。
 # 密钥见 .env.example
 
 server:
@@ -60,7 +60,7 @@ registries:
   - name: dockerhub
     enabled: true
     hosts:
-      - "reg.example.com"
+      - "${PROXY_DOMAIN:-reg.example.com}"
     path_prefixes:
       - "docker.io"
     upstream: "https://registry-1.docker.io"

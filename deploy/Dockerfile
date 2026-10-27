@@ -1,11 +1,13 @@
 # Multi-stage build for easy-docker-proxy (static binary, non-root).
-FROM golang:1.22-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.22-alpine AS build
+ARG TARGETOS=linux
+ARG TARGETARCH
 WORKDIR /src
 RUN apk add --no-cache git ca-certificates
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/proxy ./cmd/proxy
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /out/proxy ./cmd/proxy
 
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates tzdata curl \

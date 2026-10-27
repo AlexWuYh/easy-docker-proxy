@@ -50,14 +50,16 @@ rm -f .env.bak
 unset EDP_ADMIN_TOKEN EDP_WEB_PASSWORD
 
 cp configs/config.docker.yaml configs/config.yaml
-# 将 hosts 中的 reg.example.com 改成你的真实域名
+# 并在 .env 中设置 PROXY_DOMAIN=<你的真实域名>（同时用于 hosts 与自带 Caddy）
+# 可选：宿主机 5000 被占用（如 macOS AirPlay）时设置 PROXY_PORT=15000
 
-docker compose --env-file .env -f deploy/docker-compose.yaml up -d --build
+docker compose --env-file .env -f deploy/docker-compose.yaml up -d
 ```
 
 | 项 | 说明 |
 |----|------|
-| 数据面 | 默认仅主机 **127.0.0.1:5000**，通过 TLS 边缘发布 |
+| 镜像 | `ghcr.io/alexwuyh/easy-docker-proxy:latest`（多架构，发布 Release 时由 CI 构建）；加 `--build` 可本地源码构建 |
+| 数据面 | 默认仅主机 **127.0.0.1:${PROXY_PORT:-5000}**，通过 TLS 边缘发布 |
 | 管理面 | **:5001**，默认不映射到公网 |
 | HTTPS | 推荐已有 Caddy 反代到 `127.0.0.1:5000` |
 | 统计页 | 映射 `127.0.0.1:5001` 后访问 `/stats/login.html` |

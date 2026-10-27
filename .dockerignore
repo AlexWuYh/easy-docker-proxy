@@ -1,0 +1,8 @@
+.git
+.env
+.env.*
+!.env.example
+configs/config.yaml
+bin
+docs
+*.db*

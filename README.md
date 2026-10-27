@@ -50,14 +50,16 @@ rm -f .env.bak
 unset EDP_ADMIN_TOKEN EDP_WEB_PASSWORD
 
 cp configs/config.docker.yaml configs/config.yaml
-# Replace hosts: reg.example.com with your real domain
+# Also set PROXY_DOMAIN=<your real domain> in .env (feeds config hosts + bundled Caddy)
+# Optional: PROXY_PORT=15000 if host port 5000 is taken (e.g. macOS AirPlay)
 
-docker compose --env-file .env -f deploy/docker-compose.yaml up -d --build
+docker compose --env-file .env -f deploy/docker-compose.yaml up -d
 ```
 
 | Item | Detail |
 |------|--------|
-| Data plane | Host **127.0.0.1:5000** by default; publish through TLS |
+| Image | `ghcr.io/alexwuyh/easy-docker-proxy:latest` (multi-arch, built by CI on release); add `--build` to build from source |
+| Data plane | Host **127.0.0.1:${PROXY_PORT:-5000}** by default; publish through TLS |
 | Admin plane | **:5001**, not published publicly by default |
 | HTTPS | Prefer your existing Caddy → `127.0.0.1:5000` |
 | Stats UI | Map `127.0.0.1:5001`, open `/stats/login.html` |

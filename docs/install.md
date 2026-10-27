@@ -61,16 +61,25 @@ cd easy-docker-proxy
 cp .env.example .env
 ```
 
-编辑 `.env`（**至少**）：
+**至少**需要设置下面几项。`.env` 不会执行 `$(...)` 命令替换，随机值请先在 shell 里生成再写入（以下 `sed` 会替换 `.env.example` 里已有的空行，不会产生重复键）：
 
 ```bash
-# 运维 API / metrics（建议随机 ≥32 字节）
-PROXY_ADMIN_TOKEN=$(openssl rand -hex 32)
-
-# 统计网页首次管理员（密码 ≥ 8 位；仅库为空时创建一次）
-PROXY_WEB_USER=admin
-PROXY_WEB_PASSWORD=请换成足够长的密码
+EDP_ADMIN_TOKEN="$(openssl rand -hex 32)"
+EDP_WEB_PASSWORD="$(openssl rand -base64 24 | tr -d '\n')"
+sed -i.bak -e "s|^PROXY_ADMIN_TOKEN=.*|PROXY_ADMIN_TOKEN=$EDP_ADMIN_TOKEN|" \
+  -e "s|^PROXY_WEB_PASSWORD=.*|PROXY_WEB_PASSWORD=$EDP_WEB_PASSWORD|" \
+  -e "s|^PROXY_DOMAIN=.*|PROXY_DOMAIN=你的真实域名|" .env
+rm -f .env.bak
+unset EDP_ADMIN_TOKEN EDP_WEB_PASSWORD
 ```
+
+| 变量 | 说明 |
+|------|------|
+| `PROXY_DOMAIN` | **入口域名**（不带 `https://`）。同时用于 `config.yaml` 的 dockerhub `hosts` 和自带 Caddy 的站点名，无需再改 YAML / Caddyfile |
+| `PROXY_IMAGE` | 可选，镜像地址，默认 `ghcr.io/alexwuyh/easy-docker-proxy:latest` |
+| `PROXY_PORT` | 数据面发布到宿主机 `127.0.0.1` 的端口，默认 `5000`（容器内固定 5000）。macOS 上 5000 常被 AirPlay 占用，可改成 `15000` |
+| `PROXY_ADMIN_TOKEN` | 运维 API / metrics，随机 ≥32 字节 |
+| `PROXY_WEB_USER` / `PROXY_WEB_PASSWORD` | 统计网页首次管理员（密码 ≥ 8 位；仅库为空时创建一次） |
 
 可选（按需填写，空 = 对该上游公共匿名拉取）：
 
@@ -84,6 +93,7 @@ PROXY_WEB_PASSWORD=请换成足够长的密码
 | `ELASTIC_USER` / `ELASTIC_TOKEN` | Elastic 镜像 |
 | `PROXY_PULL_USER` / `PROXY_PULL_PASSWORD` | 客户端 `docker login` 本代理（`pull_auth`） |
 | `EDGE_HTTP_PORT` / `EDGE_HTTPS_PORT` | 仅使用 compose 自带 Caddy 时（默认 80/443） |
+| `PROXY_SUBNET` 等 | 固定 Docker 网段冲突时覆盖，见 `.env.example` |
 
 完整清单与注释见仓库根目录 [.env.example](../.env.example)。
 
@@ -93,13 +103,13 @@ PROXY_WEB_PASSWORD=请换成足够长的密码
 cp configs/config.docker.yaml configs/config.yaml
 ```
 
-**必改一项**：把**你已申请并完成解析**的入口主机名写进 dockerhub 的 `hosts`（与 Caddy 站点名一致；模板里的 `reg.example.com` 请整段替换）：
+入口域名无需手改 YAML：模板中 dockerhub 的 `hosts` 已写成 `"${PROXY_DOMAIN:-reg.example.com}"`，由 `.env` 的 `PROXY_DOMAIN` 展开（须是**你已申请并完成解析**的主机名，勿带 `https://`）。
 
 ```yaml
 registries:
   - name: dockerhub
     hosts:
-      - "reg.example.com"    # ← 换成真实域名；勿带 https://
+      - "${PROXY_DOMAIN:-reg.example.com}"
     path_prefixes:
       - "docker.io"
     # ...
@@ -112,11 +122,13 @@ registries:
 在仓库**根目录**执行（`.env` 在根目录；compose 文件在 `deploy/`，须用 `--env-file` 显式指定）：
 
 ```bash
-docker compose --env-file .env -f deploy/docker-compose.yaml up -d --build
+docker compose --env-file .env -f deploy/docker-compose.yaml up -d
 ```
 
 > **说明**：`docker compose -f deploy/...` 默认把 project 目录设为 `deploy/`，会去找 `deploy/.env`。  
 > 本仓库约定 `.env` 在根目录，因此所有 compose 命令都带 `--env-file .env`。
+
+默认拉取 CI 发布的镜像 `ghcr.io/alexwuyh/easy-docker-proxy:latest`（linux/amd64、linux/arm64）。想固定版本，在 `.env` 设置 `PROXY_IMAGE=ghcr.io/alexwuyh/easy-docker-proxy:<tag>`；想用本地源码构建（含未发布的修改），在命令末尾加 `--build`。升级到新镜像：`docker compose --env-file .env -f deploy/docker-compose.yaml pull && docker compose --env-file .env -f deploy/docker-compose.yaml up -d`。
 
 查看日志：
 
@@ -128,9 +140,10 @@ docker compose --env-file .env -f deploy/docker-compose.yaml logs -f proxy
 
 ```bash
 # 数据面握手（Host 用你的入口域名）
+set -a; . ./.env; set +a
 curl -sS -o /dev/null -w '%{http_code}\n' \
-  -H 'Host: reg.example.com' http://127.0.0.1:5000/v2/
-# Host 换成你的真实域名；期望：200
+  -H "Host: $PROXY_DOMAIN" "http://127.0.0.1:${PROXY_PORT:-5000}/v2/"
+# 期望：200
 ```
 
 ---
@@ -142,7 +155,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' \
 只跑本仓库的 **proxy**，**不要** `compose --profile edge`。
 
 在现有 Caddyfile 中增加（完整可复制文件：[deploy/caddy.external.example](../deploy/caddy.external.example)）。  
-将下面的 `reg.example.com` 换成**你的真实域名**（须已解析到本机）：
+将下面的 `reg.example.com` 换成**你的真实域名**（须已解析到本机），`127.0.0.1:5000` 换成 `.env` 中的 `PROXY_PORT`：
 
 ```caddy
 reg.example.com {
@@ -164,7 +177,7 @@ reg.example.com {
 
 | 项 | 说明 |
 |----|------|
-| 反代目标 | **5000**（数据面），不是 5001 |
+| 反代目标 | `127.0.0.1:$PROXY_PORT`（默认 **5000**，数据面），不是 5001 |
 | Host | 保留客户端 Host，与 `hosts` / 默认路由一致 |
 | 超时 | 大层传输建议 `read_timeout 0` |
 | 证书 | 只给**你的入口域名**配证即可（Caddy 自动 HTTPS 或自备证书） |
@@ -175,10 +188,10 @@ reg.example.com {
 ### 4.2 无现成边缘时（可选）
 
 ```bash
-docker compose --env-file .env -f deploy/docker-compose.yaml --profile edge up -d --build
+docker compose --env-file .env -f deploy/docker-compose.yaml --profile edge up -d
 ```
 
-默认映射 **80/443**。如宿主机已有服务，可在 `.env` 设置 `EDGE_HTTP_PORT` / `EDGE_HTTPS_PORT` 覆盖。配置见 [deploy/Caddyfile](../deploy/Caddyfile)。
+站点名取自 `.env` 的 `PROXY_DOMAIN`（`deploy/Caddyfile` 使用 `{$PROXY_DOMAIN}`，**务必先设置**，否则 Caddy 会去为占位域名 `reg.example.com` 申请证书而失败）。默认映射 **80/443**。如宿主机已有服务，可在 `.env` 设置 `EDGE_HTTP_PORT` / `EDGE_HTTPS_PORT` 覆盖。配置见 [deploy/Caddyfile](../deploy/Caddyfile)。
 
 ### 4.3 仅 HTTP 试用（内网）
 
@@ -255,7 +268,7 @@ PROXY_PULL_PASSWORD=your-pull-password
 ```
 
 ```bash
-printf '%s' "$PROXY_PULL_PASSWORD" | docker login reg.example.com \\
+printf '%s' "$PROXY_PULL_PASSWORD" | docker login reg.example.com \
   --username "$PROXY_PULL_USER" --password-stdin
 ```
 
@@ -283,7 +296,7 @@ printf '%s' "$PROXY_PULL_PASSWORD" | docker login reg.example.com \\
 ### 6.2 `default`
 
 无 `path_prefixes` 命中时的上游 **name**。  
-mirrors 场景请保持 `dockerhub`；设为 `""` 则未匹配前缀且未命中 Host 时 404。
+mirrors 场景只要入口域名已写入 dockerhub 的 `hosts`（`PROXY_DOMAIN`），`default` 设为 `""` 也能工作，且未知 Host 会 404。保持 `dockerhub` 时，任何未知 Host 都会回落到 Hub——公网部署请同时配置 `access_control` 或 `pull_auth`，避免成为开放加速器。
 
 ### 6.3 `registries[]`（核心）
 
@@ -330,9 +343,9 @@ mirrors 场景请保持 `dockerhub`；设为 `""` 则未匹配前缀且未命中
 修改挂载的 `config.yaml` 后：
 
 ```bash
-# 需先映射 127.0.0.1:5001 或在容器网络内执行
-curl -X POST -H "Authorization: Bearer $PROXY_ADMIN_TOKEN" \
-  http://127.0.0.1:5001/-/reload
+# 无需映射 5001：在容器内执行（镜像自带 curl）
+docker compose --env-file .env -f deploy/docker-compose.yaml exec proxy \
+  sh -c 'curl -fsS -X POST -H "Authorization: Bearer $PROXY_ADMIN_TOKEN" http://127.0.0.1:5001/-/reload'
 ```
 
 或：
@@ -392,8 +405,8 @@ CGO_ENABLED=0 go test ./...
 ## 9. 验收清单
 
 - [ ] 域名已申请，DNS 已解析到代理机  
-- [ ] `config.yaml` `hosts` 与 Caddy 站点名均为该真实域名  
-- [ ] `curl -H 'Host: <你的域名>' http://127.0.0.1:5000/v2/` → 200  
+- [ ] `.env` 的 `PROXY_DOMAIN` 为该真实域名（`hosts` 与自带 Caddy 站点名均由它生成）  
+- [ ] `curl -H 'Host: <你的域名>' http://127.0.0.1:<PROXY_PORT>/v2/` → 200  
 - [ ] mirrors 配置后 `docker pull nginx:alpine` 成功  
 - [ ] `docker pull <你的域名>/ghcr.io/...` 成功（或可接受的上游错误，非代理 404）  
 - [ ] 统计页可登录；看板「上游」有数据  

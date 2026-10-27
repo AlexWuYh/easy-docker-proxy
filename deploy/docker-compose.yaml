@@ -2,14 +2,15 @@
 # Usage (from repo root — .env lives at repo root, not under deploy/):
 #   cp .env.example .env && edit PROXY_ADMIN_TOKEN / PROXY_WEB_PASSWORD
 #   cp configs/config.docker.yaml configs/config.yaml
-#   docker compose --env-file .env -f deploy/docker-compose.yaml up -d --build
+#   docker compose --env-file .env -f deploy/docker-compose.yaml up -d      # pulls the GHCR image
+#   (add --build to build from local source instead)
 #
 # Why --env-file .env:
 #   Compose defaults project dir to the compose file's directory (deploy/),
 #   so it would look for deploy/.env. Pass root .env explicitly for ${VAR} interpolation.
 #
 # Ports:
-#   - Data plane published on host 127.0.0.1:5000 (for an existing host edge)
+#   - Data plane published on host 127.0.0.1:${PROXY_PORT:-5000} (for an existing host edge)
 #   - Admin/stats NOT published by default
 #   - Prefer reverse-proxy with your existing Caddy → host :5000 (see deploy/README.md)
 #   - Optional edge profile only if you have no edge yet (standard 80/443)
@@ -21,7 +22,9 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
-    image: easy-docker-proxy:local
+    # Published by .github/workflows/release.yml. Override with PROXY_IMAGE in .env
+    # (e.g. a version tag); `up --build` builds from source and tags it with this name.
+    image: ${PROXY_IMAGE:-ghcr.io/alexwuyh/easy-docker-proxy:latest}
     restart: unless-stopped
     environment:
       PROXY_ADMIN_TOKEN: ${PROXY_ADMIN_TOKEN:?set PROXY_ADMIN_TOKEN in .env}
@@ -42,12 +45,13 @@ services:
       ELASTIC_USER: ${ELASTIC_USER:-}
       ELASTIC_TOKEN: ${ELASTIC_TOKEN:-}
       PROXY_CADDY_IP: ${PROXY_CADDY_IP:-172.30.0.3}
+      PROXY_DOMAIN: ${PROXY_DOMAIN:-reg.example.com}
     volumes:
       - ../configs/config.yaml:/etc/proxy/config.yaml:ro
       - proxy-data:/data
     ports:
       # Registry data plane — loopback only; publish publicly through a TLS edge.
-      - "127.0.0.1:5000:5000"
+      - "127.0.0.1:${PROXY_PORT:-5000}:5000"
       # Optional local-only stats (uncomment):
       # - "127.0.0.1:5001:5001"
     security_opt:
@@ -68,6 +72,9 @@ services:
     ports:
       - "${EDGE_HTTP_PORT:-80}:80"
       - "${EDGE_HTTPS_PORT:-443}:443"
+    environment:
+      # Site address in deploy/Caddyfile ({$PROXY_DOMAIN}); set in root .env.
+      PROXY_DOMAIN: ${PROXY_DOMAIN:-reg.example.com}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data

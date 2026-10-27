@@ -29,19 +29,27 @@
 ```bash
 cd /path/to/easy-docker-proxy
 cp .env.example .env
-# 生成强 token
-echo "PROXY_ADMIN_TOKEN=$(openssl rand -hex 32)" >> .env
+# .env 不支持 $(...)；用 sed 替换示例里已有的空行（勿 >> 追加，会产生重复键）
+sed -i.bak \
+  -e "s|^PROXY_ADMIN_TOKEN=.*|PROXY_ADMIN_TOKEN=$(openssl rand -hex 32)|" \
+  -e "s|^PROXY_WEB_PASSWORD=.*|PROXY_WEB_PASSWORD=$(openssl rand -base64 24 | tr -d '\n')|" \
+  -e "s|^PROXY_DOMAIN=.*|PROXY_DOMAIN=你的真实域名|" .env
+rm -f .env.bak
+# 可选：PROXY_PORT（宿主机数据面端口，默认 5000；macOS 常需改为 15000）
 
 cp configs/config.docker.yaml configs/config.yaml
-# 确认 hosts 为官方 Registry 主机名，和/或 registry-mirrors 使用的代理地址
+# hosts 已由 PROXY_DOMAIN 展开（你的入口域名，不是上游官方域名）
 # 公网环境建议 access_control.mode: whitelist
 ```
 
 ### 2. 仅数据面
 
+默认拉取 `ghcr.io/alexwuyh/easy-docker-proxy:latest`（由 Release 流水线构建推送）；本地源码构建请加 `--build`，固定版本用 `.env` 的 `PROXY_IMAGE`。
+
 ```bash
-docker compose --env-file .env -f deploy/docker-compose.yaml up -d --build
-curl -H 'Host: reg.example.com' http://127.0.0.1:5000/v2/
+docker compose --env-file .env -f deploy/docker-compose.yaml up -d
+set -a; . ./.env; set +a
+curl -H "Host: $PROXY_DOMAIN" "http://127.0.0.1:${PROXY_PORT:-5000}/v2/"
 ```
 
 ### 3. 客户端：单域名混合模式
@@ -70,13 +78,13 @@ mirrors 示例（域名须已解析）：
 **真实域名** → 数据面 **5000**；**不要** `compose --profile edge`（除非没有现成 Caddy）。
 
 ```bash
-docker compose --env-file .env -f deploy/docker-compose.yaml up -d --build
-curl -sS -o /dev/null -w '%{http_code}\n' -H 'Host: reg.example.com' http://127.0.0.1:5000/v2/
+docker compose --env-file .env -f deploy/docker-compose.yaml up -d
+curl -sS -o /dev/null -w '%{http_code}\n' -H "Host: $PROXY_DOMAIN" "http://127.0.0.1:${PROXY_PORT:-5000}/v2/"
 ```
 
 `trusted_proxies` 只含真实 Caddy 出口（同机 `127.0.0.1/32`；compose 使用 `.env` 的 `PROXY_CADDY_IP`，勿写整个 `172.16.0.0/12`）。
 
-完整片段：[caddy.external.example](./caddy.external.example)（站点名改成你的域名）。
+完整片段：[caddy.external.example](./caddy.external.example)（站点名改成你的域名，端口与 `PROXY_PORT` 一致）。
 
 ```caddy
 reg.example.com {
@@ -96,12 +104,12 @@ reg.example.com {
 
 | 项 | 说明 |
 |----|------|
-| 反代目标 | **5000**（数据面），不是 5001 |
+| 反代目标 | `127.0.0.1:$PROXY_PORT`（默认 **5000**，数据面），不是 5001 |
 | Host | 保留 `{host}`，与 config `hosts` / 默认路由一致 |
 | 超时 | blob 用 `read_timeout 0` |
 | 证书 | 只给**你的入口域名**配证，无需 ghcr.io 证书 |
 
-可选自带 Caddy：`--profile edge`（默认宿主机 80/443；端口冲突时通过 `.env` 覆盖）。
+可选自带 Caddy：`--profile edge`（站点名取自 `.env` 的 `PROXY_DOMAIN`，务必先设置；默认宿主机 80/443，端口冲突时通过 `.env` 覆盖）。
 
 ### 5. Stats / Metrics（仅本机或内网）
 
@@ -118,7 +126,7 @@ open "http://127.0.0.1:5001/stats/login.html"
 # 浏览器登录 Web 控制台；拉取账号在「账号」页单独管理
 
 # API 也可用 PROXY_ADMIN_TOKEN：
-export TOKEN=$(grep PROXY_ADMIN_TOKEN .env | cut -d= -f2-)
+export TOKEN=$(grep ^PROXY_ADMIN_TOKEN= .env | cut -d= -f2-)
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:5001/api/v1/summary?range=7d
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:5001/metrics
 ```
@@ -139,7 +147,7 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:5001/metrics
 | `PROXY_ADMIN_TOKEN` | 随机 ≥32 字节；勿写入 git |
 | `trusted_proxies` | 仅包含真实边缘（Caddy/Nginx）网段 |
 | `access_control` | 公网建议 `whitelist`（或开启 `pull_auth.required`） |
-| `default` | 公网建议留空：未知 Host → 404；勿与 `ACL off` 叠加成开放加速器 |
+| `default` | 公网建议留空（入口域名已在 dockerhub `hosts` 中，mirrors 照常工作）：未知 Host → 404；勿让 `default: dockerhub` 与 `ACL off` 叠加成开放加速器 |
 | `upstream_allowlist` | 默认开启；自定义上游需加入 hosts |
 | `rate_limit` | 默认开启 |
 | `/-/config` / `/-/reload` | 仅 **admin** 会话或 `PROXY_ADMIN_TOKEN`；viewer 无权限 |

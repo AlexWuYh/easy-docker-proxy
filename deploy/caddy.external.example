@@ -5,13 +5,13 @@
 #
 # 1. 只启动 proxy（宿主机 5000）
 # 2. trusted_proxies 含 Caddy 出口（同机 127.0.0.1/32）
-# 3. config 中 hosts 含同一真实域名，default: dockerhub
+# 3. .env 的 PROXY_DOMAIN 即该域名（config hosts 自动取值）；端口为 PROXY_PORT（默认 5000）
 # 4. 客户端：
 #    - registry-mirrors: ["https://<你的域名>"]
 #    - docker pull <你的域名>/ghcr.io/owner/app:tag
 
 reg.example.com {
-	reverse_proxy 127.0.0.1:5000 {
+	reverse_proxy 127.0.0.1:5000 { # 5000 = PROXY_PORT
 		header_up Host {host}
 		header_up X-Forwarded-Host {host}
 		header_up X-Forwarded-Proto {scheme}
