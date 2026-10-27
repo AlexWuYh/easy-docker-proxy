@@ -49,6 +49,12 @@ func Handler() http.Handler {
 				data = data2
 				name = path.Join(name, "index.html")
 			} else {
+				// Unknown page (no extension, or .html) → console home, which itself
+				// bounces to login when unauthenticated. Missing assets stay 404.
+				if ext := path.Ext(name); ext == "" || ext == ".html" {
+					http.Redirect(w, r, "/stats/index.html", http.StatusFound)
+					return
+				}
 				http.NotFound(w, r)
 				return
 			}

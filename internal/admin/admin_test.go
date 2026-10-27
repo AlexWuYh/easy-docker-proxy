@@ -65,6 +65,25 @@ func TestRootRedirectsToLogin(t *testing.T) {
 	if rr.Code != http.StatusFound || rr.Header().Get("Location") != "/stats/login.html" {
 		t.Fatalf("got %d %q", rr.Code, rr.Header().Get("Location"))
 	}
+	for _, p := range []string{"/login", "/index.html"} {
+		rr = httptest.NewRecorder()
+		mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, p, nil))
+		if rr.Code != http.StatusFound || rr.Header().Get("Location") != "/stats/login.html" {
+			t.Fatalf("%s: got %d %q", p, rr.Code, rr.Header().Get("Location"))
+		}
+	}
+	for _, p := range []string{"/stats/nope", "/stats/index"} {
+		rr = httptest.NewRecorder()
+		mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, p, nil))
+		if rr.Code != http.StatusFound || rr.Header().Get("Location") != "/stats/index.html" {
+			t.Fatalf("%s: got %d %q", p, rr.Code, rr.Header().Get("Location"))
+		}
+	}
+	rr = httptest.NewRecorder()
+	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/stats/js/missing.js", nil))
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("missing asset must 404, got %d", rr.Code)
+	}
 	rr = httptest.NewRecorder()
 	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/v1/summary", nil))
 	if rr.Code != http.StatusUnauthorized {

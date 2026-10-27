@@ -50,8 +50,10 @@ func NewMux(h *Handler) http.Handler {
 			mux.ServeHTTP(w, r)
 			return
 		}
-		// Bare root of the admin plane → console login (the UI lives under /stats/).
-		if path == "/" && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+		// Browser navigation to any non-API path (/, /login, /index.html, ...) → console
+		// login. API, metrics and /-/ routes keep their plain 401/404 for programmatic clients.
+		if (r.Method == http.MethodGet || r.Method == http.MethodHead) && !isMachinePath(path) &&
+			!strings.HasPrefix(path, "/stats") {
 			http.Redirect(w, r, "/stats/login.html", http.StatusFound)
 			return
 		}
@@ -78,6 +80,10 @@ func NewMux(h *Handler) http.Handler {
 		}
 		mux.ServeHTTP(w, r)
 	}))
+}
+
+func isMachinePath(p string) bool {
+	return strings.HasPrefix(p, "/api/") || p == "/metrics" || strings.HasPrefix(p, "/-/")
 }
 
 // withSecurityHeaders applies browser hardening on the admin/stats plane.
