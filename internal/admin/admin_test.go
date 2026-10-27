@@ -58,6 +58,20 @@ func TestHealthzOpen(t *testing.T) {
 	}
 }
 
+func TestRootRedirectsToLogin(t *testing.T) {
+	mux := NewMux(&Handler{Proxy: testProxy(t)})
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rr.Code != http.StatusFound || rr.Header().Get("Location") != "/stats/login.html" {
+		t.Fatalf("got %d %q", rr.Code, rr.Header().Get("Location"))
+	}
+	rr = httptest.NewRecorder()
+	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/v1/summary", nil))
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("api must stay protected, got %d", rr.Code)
+	}
+}
+
 func TestSecurityHeaders(t *testing.T) {
 	h := NewMux(&Handler{Proxy: testProxy(t), Store: testStore(t)})
 	rr := httptest.NewRecorder()

@@ -131,6 +131,8 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:5001/api/v1/summary?rang
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:5001/metrics
 ```
 
+通过反代暴露管理面时，浏览器访问 `https://<管理面域名>/`（自动跳转）或 `/stats/login.html`；未登录访问 API 路径会返回 `unauthorized`。反代层请加 IP 白名单或 VPN。
+
 ### 拉取鉴权（可选）
 
 默认 `pull_auth.mode: off`（匿名 pull）。若需 `docker login`：

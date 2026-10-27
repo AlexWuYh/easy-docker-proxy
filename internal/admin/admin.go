@@ -50,6 +50,11 @@ func NewMux(h *Handler) http.Handler {
 			mux.ServeHTTP(w, r)
 			return
 		}
+		// Bare root of the admin plane → console login (the UI lives under /stats/).
+		if path == "/" && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+			http.Redirect(w, r, "/stats/login.html", http.StatusFound)
+			return
+		}
 		// Public login API
 		if path == "/api/v1/auth/login" {
 			mux.ServeHTTP(w, r)

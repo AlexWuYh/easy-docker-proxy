@@ -377,6 +377,8 @@ ports:
 http://127.0.0.1:5001/stats/login.html
 ```
 
+通过反代（如 `https://stats.example.com`）暴露管理面时，访问 `https://<管理面域名>/`（会自动跳转）或 `/stats/login.html`；API 路径（`/api/`、`/metrics`、`/-/`）仍需登录或 Token，未登录返回 `unauthorized`。管理面没有独立的 TLS 与访问限制，反代层请加 IP 白名单或 VPN。
+
 ### 7.2 功能
 
 | 页面 | 内容 |
