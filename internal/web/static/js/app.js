@@ -174,12 +174,12 @@
     if (document.querySelector('link[rel="icon"]')) return;
     const link = document.createElement("link");
     link.rel = "icon";
-    link.type = "image/svg+xml";
-    link.href = "/stats/favicon.svg";
+    link.type = "image/png";
+    link.href = "/stats/app-icon.png";
     document.head.appendChild(link);
     const apple = document.createElement("link");
     apple.rel = "apple-touch-icon";
-    apple.href = "/stats/favicon.svg";
+    apple.href = "/stats/app-icon.png";
     document.head.appendChild(apple);
   }
 
