@@ -14,7 +14,7 @@ type Limiter struct {
 	rps     float64
 	burst   float64
 
-	mu   sync.Mutex
+	mu      sync.Mutex
 	buckets map[string]*bucket
 	// lastCleanup avoids scanning every request.
 	lastCleanup time.Time
